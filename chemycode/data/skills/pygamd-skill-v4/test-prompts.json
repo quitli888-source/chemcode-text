@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "prompt": "我想用pygamd跑一个AB两嵌段共聚物的DPD自组装模拟，5000个粒子，GPU加速，能给我一个可运行的完整脚本吗？",
+    "scenario": "基础happy-path",
+    "expected": "完整可运行的Python脚本：包含pygamd_gpu_init初始化、XML配置生成、正确的pygamd.force.dpd/setParams、pygamd.force.bond/setParams(harmonic)、pygamd.integration.gwvv、pygamd.dump.xml、pygamd.application.dynamics/app.run正确API，以及合理的DPD参数（A-A/B-B alpha=25, A-B alpha=30-35）"
+  },
+  {
+    "id": 2,
+    "prompt": "pygamd能跑LJ NVT流体模拟吗？我有一个Lennard-Jones体系想用NVT系综做平衡。",
+    "scenario": "中等难度-非DPD力场",
+    "expected": "正确切换到pygamd.force.lj API（如果存在），说明使用Berendsen或Nose-Hoover恒温器（pygamd.integration.nvt或thermo模块），给出完整LJ参数设置（epsilon、sigma、rcut），并明确告知pygamd主要面向DPD，LJ可能需fallback到HOOMD/LAMMPS"
+  },
+  {
+    "id": 3,
+    "prompt": "我手头有GROMACS的力场拓扑文件（.top和.itp），想用pygamd直接读取运行，能做到吗？跨软件力场兼容性怎么解决？",
+    "scenario": "复杂-跨平台力场",
+    "expected": "明确说明pygamd不直接支持GROMACS拓扑格式，给出3条可行路径：(1)手动转换GROMACS参数到pygamd XML/dpd.setParams格式；(2)使用InterMol/ParmEd等转换工具；(3)如果力场是GROMOS/OPLS等，可能需要重新参数化；附上具体转换示例代码片段"
+  }
+]
