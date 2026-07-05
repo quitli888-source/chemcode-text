@@ -81,11 +81,14 @@ export class LoginView extends LitElement {
   @state() private submitting = false;
   @state() private error = '';
   @state() private apiMode: 'mock' | 'real' = 'mock';
+  @state() private language: 'zh' | 'en' = 'zh';
 
   connectedCallback() {
     super.connectedCallback();
     subscribe(() => {
-      this.error = getState().error || '';
+      const s = getState();
+      this.error = s.error || '';
+      this.language = s.language;
     });
     this.apiMode = getApiMode();
   }
@@ -96,22 +99,22 @@ export class LoginView extends LitElement {
     this.submitting = true;
     const ok = await login(this.username.trim(), this.password);
     this.submitting = false;
-    if (!ok) this.error = getState().error || '登录失败';
+    if (!ok) this.error = getState().error || (this.language === 'en' ? 'Login failed' : '登录失败');
   }
 
   render() {
     return html`
       <form class="box" @submit=${(e: Event) => this.onSubmit(e)}>
         <div class="title">Chemycode</div>
-        <div class="subtitle">计算化学 AI Agent 平台</div>
+        <div class="subtitle">${this.language === 'en' ? 'Computational Chemistry AI Agent Platform' : '计算化学 AI Agent 平台'}</div>
         <div class="field">
-          <label>用户名</label>
+          <label>${this.language === 'en' ? 'Username' : '用户名'}</label>
           <input type="text" autocomplete="username" required
             .value=${this.username}
             @input=${(e: InputEvent) => this.username = (e.target as HTMLInputElement).value} />
         </div>
         <div class="field">
-          <label>密码</label>
+          <label>${this.language === 'en' ? 'Password' : '密码'}</label>
           <input type="password" autocomplete="current-password" required
             .value=${this.password}
             @input=${(e: InputEvent) => this.password = (e.target as HTMLInputElement).value} />
@@ -120,16 +123,16 @@ export class LoginView extends LitElement {
           <label>
             <input type="checkbox" .checked=${this.remember}
               @change=${(e: Event) => this.remember = (e.target as HTMLInputElement).checked} />
-            <span>记住我</span>
+            <span>${this.language === 'en' ? 'Remember me' : '记住我'}</span>
           </label>
         </div>
         <button class="submit" type="submit" ?disabled=${this.submitting}>
-          ${this.submitting ? '登录中…' : '登入'}
+          ${this.submitting ? (this.language === 'en' ? 'Signing in…' : '登录中…') : (this.language === 'en' ? 'Sign in' : '登入')}
         </button>
         ${this.error ? html`<div class="error">${this.error}</div>` : ''}
         <div class="hint">
-          当前模式：<strong>${this.apiMode === 'mock' ? 'Mock (无需后端)' : 'Real (需后端)'}</strong><br/>
-          Mock 模式下任意非空账号密码均可登录。
+          ${this.language === 'en' ? 'Current mode' : '当前模式'}：<strong>${this.apiMode === 'mock' ? (this.language === 'en' ? 'Mock (no backend required)' : 'Mock (无需后端)') : (this.language === 'en' ? 'Real (backend required)' : 'Real (需后端)')}</strong><br/>
+          ${this.language === 'en' ? 'In mock mode, any non-empty username and password will work.' : 'Mock 模式下任意非空账号密码均可登录。'}
         </div>
       </form>
     `;

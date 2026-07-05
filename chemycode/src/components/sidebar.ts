@@ -14,14 +14,17 @@ interface NavItem {
   icon: string;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { view: 'chat', label: '新建任务', icon: '💬' },
-  { view: 'database', label: '论文检索', icon: '🔬' },
-  { view: 'skills', label: 'Skills', icon: '🧩' },
-  { view: 'knowledge', label: '个人知识库', icon: '📚' },
-  { view: 'usage', label: '使用情况', icon: '📊' },
-  { view: 'settings', label: '设置', icon: '⚙️' },
-];
+function getNavLabels(lang: 'zh' | 'en'): NavItem[] {
+  return [
+    { view: 'chat', label: lang === 'en' ? 'New task' : '新建任务', icon: '💬' },
+    { view: 'database', label: lang === 'en' ? 'Paper search' : '论文检索', icon: '🔬' },
+    { view: 'skills', label: 'Skills', icon: '🧩' },
+    { view: 'workflow', label: lang === 'en' ? 'Built-in workflows' : '内置工作流', icon: '⚙️' },
+    { view: 'knowledge', label: lang === 'en' ? 'Wiki' : 'Wiki', icon: '📚' },
+    { view: 'usage', label: lang === 'en' ? 'Usage' : '使用情况', icon: '📊' },
+    { view: 'settings', label: lang === 'en' ? 'Settings' : '设置', icon: '⚙️' },
+  ];
+}
 
 @customElement('chemycode-sidebar')
 export class Sidebar extends LitElement {
@@ -185,6 +188,7 @@ export class Sidebar extends LitElement {
   @state() private activeSessionId: string | null = null;
   @state() private renamingId: string | null = null;
   @state() private renamingValue: string = '';
+  @state() private language: 'zh' | 'en' = 'zh';
 
   private _unsub: (() => void) | null = null;
 
@@ -199,6 +203,7 @@ export class Sidebar extends LitElement {
       this.selectedTaskId = s.selectedTaskId;
       this.sessions = s.sessions || [];
       this.activeSessionId = s.activeSessionId;
+      this.language = s.language;
     });
   }
 
@@ -230,18 +235,19 @@ export class Sidebar extends LitElement {
   private async confirmDelete(t: Task, e: Event) {
     e.stopPropagation();
     const ok = await showConfirm({
-      title: '删除任务',
-      message: `确定删除任务「${t.name}」吗？此操作无法撤销。`,
-      confirmText: '删除',
+      title: this.language === 'en' ? 'Delete task' : '删除任务',
+      message: this.language === 'en' ? `Delete task "${t.name}"? This action cannot be undone.` : `确定删除任务「${t.name}」吗？此操作无法撤销。`,
+      confirmText: this.language === 'en' ? 'Delete' : '删除',
       destructive: true,
     });
     if (ok) await deleteTask(t.id);
   }
 
   render() {
+    const navItems = getNavLabels(this.language);
     return html`
       <div class="nav-section">
-        ${NAV_ITEMS.map((item) => html`
+        ${navItems.map((item) => html`
           <div class="nav-item ${this.currentView === item.view ? 'active' : ''}"
                @click=${() => item.view === 'chat' ? createNewSession() : setView(item.view)}>
             <span>${item.icon}</span>
@@ -253,16 +259,16 @@ export class Sidebar extends LitElement {
       <div class="divider"></div>
 
       <button class="new-session-btn" @click=${() => createNewSession()}>
-        ＋ 新建对话
+        ＋ ${this.language === 'en' ? 'New chat' : '新建对话'}
       </button>
 
       <div class="task-label">
-        <span>对话列表</span>
+        <span>${this.language === 'en' ? 'Chat list' : '对话列表'}</span>
       </div>
 
       <div class="session-list">
         ${this.sessions.length === 0
-          ? html`<div class="no-tasks">暂无对话</div>`
+          ? html`<div class="no-tasks">${this.language === 'en' ? 'No chats yet' : '暂无对话'}</div>`
           : this.sessions.map((s) => {
               const isActive = this.activeSessionId === s.id;
               const isRenaming = this.renamingId === s.id;
@@ -282,9 +288,9 @@ export class Sidebar extends LitElement {
                           />
                     `
                     : html`
-                        <span class="session-title">${s.title || '新对话'}</span>
-                        <button class="session-rename-btn" title="重命名" @click=${(e: Event) => { e.stopPropagation(); this.renamingId = s.id; this.renamingValue = s.title || '新对话'; }}>✏️</button>
-                        <button class="session-delete" title="删除" @click=${(e: Event) => { e.stopPropagation(); deleteSession(s.id); }}>✕</button>
+                        <span class="session-title">${s.title || (this.language === 'en' ? 'New chat' : '新对话')}</span>
+                        <button class="session-rename-btn" title=${this.language === 'en' ? 'Rename' : '重命名'} @click=${(e: Event) => { e.stopPropagation(); this.renamingId = s.id; this.renamingValue = s.title || (this.language === 'en' ? 'New chat' : '新对话'); }}>✏️</button>
+                        <button class="session-delete" title=${this.language === 'en' ? 'Delete' : '删除'} @click=${(e: Event) => { e.stopPropagation(); deleteSession(s.id); }}>✕</button>
                       `}
                 </div>
               `;
@@ -294,21 +300,21 @@ export class Sidebar extends LitElement {
       <div class="divider"></div>
 
       <div class="search-area">
-        <input class="search-input" type="text" placeholder="搜索任务…"
+        <input class="search-input" type="text" placeholder=${this.language === 'en' ? 'Search tasks…' : '搜索任务…'}
           .value=${this.searchQuery}
           @input=${(e: InputEvent) => this.searchQuery = (e.target as HTMLInputElement).value} />
       </div>
 
       <div class="task-label">
-        <span>最近任务</span>
-        <button class="refresh-btn ${this.refreshing ? 'spinning' : ''}" @click=${() => this.refresh()} title="刷新">
+        <span>${this.language === 'en' ? 'Recent tasks' : '最近任务'}</span>
+        <button class="refresh-btn ${this.refreshing ? 'spinning' : ''}" @click=${() => this.refresh()} title=${this.language === 'en' ? 'Refresh' : '刷新'}>
           ↻
         </button>
       </div>
 
       <div class="task-list">
         ${this.filteredTasks.length === 0
-          ? html`<div class="no-tasks">${this.searchQuery ? '无匹配任务' : '暂无任务'}</div>`
+          ? html`<div class="no-tasks">${this.searchQuery ? (this.language === 'en' ? 'No matching tasks' : '无匹配任务') : (this.language === 'en' ? 'No tasks yet' : '暂无任务')}</div>`
           : this.filteredTasks.map((t) => {
               const statusIcon = t.status === 'running'
                 ? html`<div class="spinner"></div>`
@@ -322,8 +328,8 @@ export class Sidebar extends LitElement {
                     <div class="task-meta">${CALC_TYPE_LABELS[t.calcType]} · ${t.createdAt}</div>
                   </div>
                   <div class="task-actions">
-                    <button class="action-btn" title="查看" @click=${(e: Event) => { e.stopPropagation(); selectTask(t.id); }}>👁</button>
-                    <button class="action-btn danger" title="删除" @click=${(e: Event) => this.confirmDelete(t, e)}>🗑</button>
+                    <button class="action-btn" title=${this.language === 'en' ? 'View' : '查看'} @click=${(e: Event) => { e.stopPropagation(); selectTask(t.id); }}>👁</button>
+                    <button class="action-btn danger" title=${this.language === 'en' ? 'Delete' : '删除'} @click=${(e: Event) => this.confirmDelete(t, e)}>🗑</button>
                   </div>
                 </div>
               `;

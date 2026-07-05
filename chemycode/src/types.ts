@@ -112,6 +112,7 @@ export type PageView =
   | 'knowledge'
   | 'database'
   | 'skills'
+  | 'workflow'
   | 'settings'
   | 'usage';
 

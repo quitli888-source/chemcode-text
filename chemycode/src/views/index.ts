@@ -4,5 +4,6 @@ import './task-detail-view';
 import './knowledge-view';
 import './database-view';
 import './skills-view';
+import './workflow-view';
 import './settings-view';
 import './usage-view';

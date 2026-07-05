@@ -82,6 +82,37 @@ function readLS<T>(key: string, fallback: T): T {
   try { return JSON.parse(v) as T; } catch { return fallback; }
 }
 
+function applyThemeMode(mode: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.setAttribute('data-theme', mode);
+  document.documentElement.setAttribute('data-color-scheme', mode);
+}
+
+function applyLanguage(lang: Lang): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.lang = lang;
+  document.documentElement.setAttribute('data-language', lang);
+}
+
+function applyFontSize(size: number): void {
+  if (typeof document === 'undefined') return;
+  const safeSize = Number.isFinite(size) ? Math.max(12, Math.min(18, size)) : 14;
+  const scale = safeSize / 14;
+  const set = (name: string, value: string) => document.documentElement.style.setProperty(name, value);
+  set('--font-size-xs', `${Math.round(11 * scale)}px`);
+  set('--font-size-sm', `${Math.round(12 * scale)}px`);
+  set('--font-size-base', `${safeSize}px`);
+  set('--font-size-lg', `${Math.round(14 * scale)}px`);
+  set('--font-size-xl', `${Math.round(15 * scale)}px`);
+  set('--font-size-2xl', `${Math.round(18 * scale)}px`);
+}
+
+function applySettingsToDocument(theme: ThemeMode, lang: Lang, fontSize: number): void {
+  applyThemeMode(theme);
+  applyLanguage(lang);
+  applyFontSize(fontSize);
+}
+
 // ---------- Initial state ----------
 
 let state: AppState = {
@@ -113,10 +144,8 @@ let state: AppState = {
   typingMessageId: null,
 };
 
-// Apply theme as early as possible to avoid a flash.
-if (typeof document !== 'undefined') {
-  document.documentElement.setAttribute('data-theme', state.theme);
-}
+// Apply settings as early as possible to avoid a flash.
+applySettingsToDocument(state.theme, state.language, state.fontSize);
 
 // ---------- Subscribers ----------
 
@@ -315,18 +344,20 @@ export function toggleSidebar(): void {
 
 export function setThemeMode(mode: ThemeMode): void {
   if (typeof localStorage !== 'undefined') localStorage.setItem(LS_THEME, JSON.stringify(mode));
-  if (typeof document !== 'undefined') document.documentElement.setAttribute('data-theme', mode);
   updateState({ theme: mode });
+  applySettingsToDocument(mode, state.language, state.fontSize);
 }
 
 export function setLanguage(lang: Lang): void {
   if (typeof localStorage !== 'undefined') localStorage.setItem(LS_LANG, JSON.stringify(lang));
   updateState({ language: lang });
+  applySettingsToDocument(state.theme, lang, state.fontSize);
 }
 
 export function setFontSize(size: number): void {
   if (typeof localStorage !== 'undefined') localStorage.setItem(LS_FONT, JSON.stringify(size));
   updateState({ fontSize: size });
+  applySettingsToDocument(state.theme, state.language, size);
 }
 
 export function setSettingsTab(tab: SettingsTab): void {

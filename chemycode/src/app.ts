@@ -71,6 +71,7 @@ export class ChemycodeApp extends LitElement {
       case 'knowledge': return html`<knowledge-view></knowledge-view>`;
       case 'database': return html`<database-view></database-view>`;
       case 'skills': return html`<chemycode-skills-view></chemycode-skills-view>`;
+      case 'workflow': return html`<workflow-view></workflow-view>`;
       case 'settings': return html`<settings-view></settings-view>`;
       case 'usage': return html`<chemycode-usage-view></chemycode-usage-view>`;
       default: return html`<chat-view></chat-view>`;

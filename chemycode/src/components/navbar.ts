@@ -84,6 +84,7 @@ export class Navbar extends LitElement {
 
   @state() private collapsed = false;
   @state() private username = 'Justinian';
+  @state() private language: 'zh' | 'en' = 'zh';
 
   private _unsub: (() => void) | null = null;
 
@@ -94,6 +95,7 @@ export class Navbar extends LitElement {
       const s = getState();
       this.collapsed = s.sidebarCollapsed;
       this.username = s.currentUser?.username || 'Justinian';
+      this.language = s.language;
     });
   }
 
@@ -114,7 +116,7 @@ export class Navbar extends LitElement {
     const initial = (this.username || '?').charAt(0).toUpperCase();
     return html`
       <div class="navbar-inner">
-        <button class="menu-btn" @click=${toggleSidebar} title="切换侧边栏">☰</button>
+        <button class="menu-btn" @click=${toggleSidebar} title=${this.language === 'en' ? 'Toggle sidebar' : '切换侧边栏'}>☰</button>
         <div class="logo">
           <div class="logo-icon">C</div>
           Chemycode

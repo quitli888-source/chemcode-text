@@ -323,17 +323,56 @@ export class SettingsView extends LitElement {
     await logout();
   }
 
+  private t(key: string): string {
+    const map: Record<string, Record<'zh' | 'en', string>> = {
+      back: { zh: '← 退出', en: '← Back' },
+      tabsAccount: { zh: '账户管理', en: 'Account' },
+      tabsSystem: { zh: '系统设置', en: 'System' },
+      tabsModels: { zh: '模型管理', en: 'Models' },
+      tabsHelp: { zh: '帮助与反馈', en: 'Help & Feedback' },
+      titlesAccount: { zh: '👤 账户管理', en: '👤 Account' },
+      titlesSystem: { zh: '⚙️ 系统设置', en: '⚙️ System Settings' },
+      titlesModels: { zh: '🤖 模型管理', en: '🤖 Model Management' },
+      titlesHelp: { zh: '❓ 帮助与反馈', en: '❓ Help & Feedback' },
+      userInfo: { zh: '用户信息', en: 'User Info' },
+      username: { zh: '用户名', en: 'Username' },
+      userId: { zh: '用户ID', en: 'User ID' },
+      email: { zh: '邮箱', en: 'Email' },
+      editProfile: { zh: '编辑资料', en: 'Edit profile' },
+      logout: { zh: '登出', en: 'Log out' },
+      language: { zh: '语言', en: 'Language' },
+      fontSize: { zh: '字体大小', en: 'Font Size' },
+      theme: { zh: '主题', en: 'Theme' },
+      light: { zh: '浅色模式', en: 'Light' },
+      dark: { zh: '深色模式', en: 'Dark' },
+      preview: { zh: '当前预览', en: 'Preview' },
+      previewText: { zh: '当前设置已实时应用到界面。你可以直接切换主题、字号和语言，查看效果。', en: 'Your current preferences are applied instantly. Switch theme, font size, and language to preview the experience.' },
+      zh: { zh: '中文', en: 'Chinese' },
+      en: { zh: 'English', en: 'English' },
+      modelHint: { zh: '提示：支持 OpenAI 兼容协议', en: 'Tip: Supports the OpenAI-compatible protocol' },
+      noModels: { zh: '尚未配置任何模型', en: 'No models configured yet' },
+      addModel: { zh: '+ 配置新模型', en: '+ Add model' },
+      helpIntro: { zh: 'Chemycode 是一个计算化学 AI Agent 平台。\n在对话中描述你的任务（分子动力学、DFT、力场、参数化等），Agent 会自动规划步骤并执行。', en: 'Chemycode is a computational chemistry AI agent platform. Describe your task in chat (molecular dynamics, DFT, force fields, parameterization, etc.) and the agent will plan and execute the steps.' },
+      shortcuts: { zh: '键盘快捷键', en: 'Keyboard shortcuts' },
+      feedback: { zh: '反馈方式', en: 'Feedback' },
+      versionInfo: { zh: '版本信息', en: 'Version info' },
+      version: { zh: '版本', en: 'Version' },
+      buildTime: { zh: '构建时间', en: 'Build time' },
+    };
+    return map[key]?.[this.language] || map[key]?.zh || key;
+  }
+
   render() {
     const tabs: { id: SettingsTab; label: string; icon: string }[] = [
-      { id: 'account', label: '账户管理', icon: '👤' },
-      { id: 'system', label: '系统设置', icon: '⚙️' },
-      { id: 'models', label: '模型管理', icon: '🤖' },
-      { id: 'help', label: '帮助与反馈', icon: '❓' },
+      { id: 'account', label: this.t('tabsAccount'), icon: '👤' },
+      { id: 'system', label: this.t('tabsSystem'), icon: '⚙️' },
+      { id: 'models', label: this.t('tabsModels'), icon: '🤖' },
+      { id: 'help', label: this.t('tabsHelp'), icon: '❓' },
     ];
 
     return html`
       <div class="settings-sidebar">
-        <div class="back-btn" @click=${() => setView('chat')}>← 退出</div>
+        <div class="back-btn" @click=${() => setView('chat')}>${this.t('back')}</div>
         ${tabs.map((tab) => html`
           <div class="settings-item ${this.activeTab === tab.id ? 'active' : ''}"
             @click=${() => setSettingsTab(tab.id)}>
@@ -344,33 +383,33 @@ export class SettingsView extends LitElement {
 
       <div class="settings-content">
         ${this.activeTab === 'account' ? html`
-          <div class="page-title">👤 账户管理</div>
+          <div class="page-title">${this.t('titlesAccount')}</div>
           <div class="card">
-            <div class="card-title">用户信息</div>
-            <div class="info-row"><span class="info-label">用户名</span><span class="info-value">${getState().currentUser?.username || '-'}</span></div>
-            <div class="info-row"><span class="info-label">用户ID</span><span class="info-value" style="font-family:var(--font-mono);font-size:var(--font-size-xs)">${getState().currentUser?.id || '-'}</span></div>
-            <div class="info-row"><span class="info-label">邮箱</span><span class="info-value">${getState().currentUser?.email || '-'}</span></div>
+            <div class="card-title">${this.t('userInfo')}</div>
+            <div class="info-row"><span class="info-label">${this.t('username')}</span><span class="info-value">${getState().currentUser?.username || '-'}</span></div>
+            <div class="info-row"><span class="info-label">${this.t('userId')}</span><span class="info-value" style="font-family:var(--font-mono);font-size:var(--font-size-xs)">${getState().currentUser?.id || '-'}</span></div>
+            <div class="info-row"><span class="info-label">${this.t('email')}</span><span class="info-value">${getState().currentUser?.email || '-'}</span></div>
           </div>
           <div style="display:flex;gap:var(--spacing-xs)">
-            <button class="auth-btn" @click=${() => showInfo('资料编辑开发中')}>编辑资料</button>
-            <button class="auth-btn outline" @click=${() => this.onLogout()}>登出</button>
+            <button class="auth-btn" @click=${() => showInfo(this.language === 'en' ? 'Profile editing is coming soon' : '资料编辑开发中')}>${this.t('editProfile')}</button>
+            <button class="auth-btn outline" @click=${() => this.onLogout()}>${this.t('logout')}</button>
           </div>
         ` : ''}
 
         ${this.activeTab === 'system' ? html`
-          <div class="page-title">⚙️ 系统设置</div>
+          <div class="page-title">${this.t('titlesSystem')}</div>
           <div class="card">
             <div class="setting-row">
-              <span class="setting-label">语言</span>
+              <span class="setting-label">${this.t('language')}</span>
               <div class="setting-control">
                 <select .value=${this.language} @change=${(e: Event) => setLanguage((e.target as HTMLSelectElement).value as Lang)}>
-                  <option value="zh">中文</option>
-                  <option value="en">English</option>
+                  <option value="zh">${this.t('zh')}</option>
+                  <option value="en">${this.t('en')}</option>
                 </select>
               </div>
             </div>
             <div class="setting-row">
-              <span class="setting-label">字体大小</span>
+              <span class="setting-label">${this.t('fontSize')}</span>
               <div class="setting-control">
                 <select .value=${String(this.fontSize)} @change=${(e: Event) => setFontSize(Number((e.target as HTMLSelectElement).value))}>
                   <option value="12">12px</option>
@@ -382,25 +421,29 @@ export class SettingsView extends LitElement {
               </div>
             </div>
             <div class="setting-row">
-              <span class="setting-label">主题</span>
+              <span class="setting-label">${this.t('theme')}</span>
               <div class="setting-control">
                 <select .value=${this.theme} @change=${(e: Event) => setThemeMode((e.target as HTMLSelectElement).value as ThemeMode)}>
-                  <option value="light">浅色模式</option>
-                  <option value="dark">深色模式</option>
+                  <option value="light">${this.t('light')}</option>
+                  <option value="dark">${this.t('dark')}</option>
                 </select>
               </div>
             </div>
           </div>
+          <div class="card">
+            <div class="card-title">${this.t('preview')}</div>
+            <p style="font-size:var(--font-size-sm);line-height:1.7;color:var(--color-text-secondary)">${this.t('previewText')}</p>
+          </div>
         ` : ''}
 
         ${this.activeTab === 'models' ? html`
-          <div class="page-title">🤖 模型管理</div>
+          <div class="page-title">${this.t('titlesModels')}</div>
           <div class="card">
             <div class="info-row" style="border-bottom:0.5px solid var(--color-border-tertiary);padding-bottom:var(--spacing-sm)">
-              <span style="font-size:var(--font-size-sm);color:var(--color-text-secondary)">提示：支持 OpenAI 兼容协议</span>
+              <span style="font-size:var(--font-size-sm);color:var(--color-text-secondary)">${this.t('modelHint')}</span>
             </div>
             ${this.models.length === 0
-              ? html`<div class="text-muted" style="padding:16px 0;font-size:var(--font-size-sm)">尚未配置任何模型</div>`
+              ? html`<div class="text-muted" style="padding:16px 0;font-size:var(--font-size-sm)">${this.t('noModels')}</div>`
               : this.models.map((m) => {
                   const r = m.id ? this.testResults[m.id] : undefined;
                   return html`
@@ -425,7 +468,7 @@ export class SettingsView extends LitElement {
                     </div>
                   `;
                 })}
-            <button class="add-btn" @click=${() => this.showAddModel = true}>+ 配置新模型</button>
+            <button class="add-btn" @click=${() => this.showAddModel = true}>${this.t('addModel')}</button>
           </div>
 
           ${this.showAddModel ? html`
@@ -577,28 +620,25 @@ export class SettingsView extends LitElement {
         ` : ''}
 
         ${this.activeTab === 'help' ? html`
-          <div class="page-title">❓ 帮助与反馈</div>
+          <div class="page-title">${this.t('titlesHelp')}</div>
           <div class="card">
-            <div class="card-title">使用帮助</div>
-            <p style="font-size:var(--font-size-sm);line-height:1.8;color:var(--color-text-secondary)">
-              Chemycode 是一个计算化学 AI Agent 平台。<br/>
-              在对话中描述你的任务（分子动力学、DFT、力场、参数化等），Agent 会自动规划步骤并执行。
-            </p>
+            <div class="card-title">${this.t('tabsHelp')}</div>
+            <p style="font-size:var(--font-size-sm);line-height:1.8;color:var(--color-text-secondary)">${this.t('helpIntro').replace(/\\n/g, '<br/>')}</p>
           </div>
           <div class="card">
-            <div class="card-title">键盘快捷键</div>
+            <div class="card-title">${this.t('shortcuts')}</div>
             <div class="info-row"><span class="info-label">Enter</span><span class="info-value">发送消息</span></div>
             <div class="info-row"><span class="info-label">Shift+Enter</span><span class="info-value">换行</span></div>
             <div class="info-row"><span class="info-label">Esc</span><span class="info-value">关闭弹窗</span></div>
           </div>
           <div class="card">
-            <div class="card-title">反馈方式</div>
+            <div class="card-title">${this.t('feedback')}</div>
             <p style="font-size:var(--font-size-sm);color:var(--color-text-secondary)">📧 support@chemycode.dev</p>
           </div>
           <div class="card">
-            <div class="card-title">版本信息</div>
-            <div class="info-row"><span class="info-label">版本</span><span class="info-value">v1.0.0</span></div>
-            <div class="info-row"><span class="info-label">构建时间</span><span class="info-value">2026-06-02</span></div>
+            <div class="card-title">${this.t('versionInfo')}</div>
+            <div class="info-row"><span class="info-label">${this.t('version')}</span><span class="info-value">v1.0.0</span></div>
+            <div class="info-row"><span class="info-label">${this.t('buildTime')}</span><span class="info-value">2026-06-02</span></div>
           </div>
         ` : ''}
       </div>

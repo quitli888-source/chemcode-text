@@ -7,11 +7,39 @@ import { getState, subscribe, searchKnowledge } from '../state';
 import type { KnowledgeEntry } from '../types';
 import '../components/markdown-renderer';
 
+const DEFAULT_WIKI_ENTRIES: KnowledgeEntry[] = [
+  {
+    id: 'workflow-basics',
+    title: '工作流设计入门',
+    category: 'Workflow',
+    content: '## 工作流设计入门\n\n1. 先定义目标与输入。\n2. 将任务拆成可验证的步骤。\n3. 逐步补齐参数、约束与输出检查。\n4. 针对关键步骤添加确认点。',
+    tags: ['workflow', 'guide'],
+    updatedAt: '2026-07-04',
+  },
+  {
+    id: 'md-practice',
+    title: '分子动力学模拟实践建议',
+    category: 'MD',
+    content: '## 分子动力学模拟实践建议\n\n- 先确认体系是否已经能稳定平衡。\n- 选择与目标体系匹配的力场。\n- 重点检查温度、压力控制以及边界条件。',
+    tags: ['md', 'simulation'],
+    updatedAt: '2026-07-04',
+  },
+  {
+    id: 'dft-checklist',
+    title: 'DFT 计算检查清单',
+    category: 'DFT',
+    content: '## DFT 计算检查清单\n\n- 验证结构优化是否收敛。\n- 检查基组与泛函是否与体系相符。\n- 对关键结果做频率分析或能量分解。',
+    tags: ['dft', 'checklist'],
+    updatedAt: '2026-07-04',
+  },
+];
+
 @customElement('knowledge-view')
 export class KnowledgeView extends LitElement {
   static styles = css`
     :host { display: block; padding: var(--spacing-lg); max-width: 860px; margin: 0 auto; }
-    .page-title { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); margin-bottom: var(--spacing-lg); }
+    .page-title { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); margin-bottom: var(--spacing-xs); }
+    .page-subtitle { color: var(--color-text-secondary); margin-bottom: var(--spacing-lg); line-height: 1.6; }
     .search-bar { margin-bottom: var(--spacing-md); }
     .search-bar input {
       width: 100%;
@@ -61,7 +89,8 @@ export class KnowledgeView extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     subscribe(() => {
-      this.entries = getState().knowledge;
+      const known = getState().knowledge;
+      this.entries = known.length > 0 ? known : DEFAULT_WIKI_ENTRIES;
     });
   }
 
@@ -80,7 +109,7 @@ export class KnowledgeView extends LitElement {
     this.loading = true;
     try {
       const r = await searchKnowledge(this.search);
-      this.entries = r;
+      this.entries = r.length > 0 ? r : (this.search ? [] : DEFAULT_WIKI_ENTRIES);
     } finally {
       this.loading = false;
     }
@@ -93,7 +122,8 @@ export class KnowledgeView extends LitElement {
   render() {
     return html`
       <div>
-        <div class="page-title">📚 个人知识库</div>
+        <div class="page-title">📚 Wiki 文档中心</div>
+        <div class="page-subtitle">这里汇总常见的计算化学方法、工作流说明与实用提示，方便你快速查阅和复用。</div>
         <div class="search-bar">
           <input type="text" placeholder="搜索知识条目…"
             .value=${this.search}

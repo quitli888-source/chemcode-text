@@ -41,6 +41,7 @@ export class ConnectionStatus extends LitElement {
 
   @state() private state: ConnectionState = 'idle';
   @state() private latency: number | undefined;
+  @state() private language: 'zh' | 'en' = 'zh';
 
   connectedCallback() {
     super.connectedCallback();
@@ -51,17 +52,30 @@ export class ConnectionStatus extends LitElement {
         this.latency = stream.getLatency();
       },
     });
+    const s = getState();
+    this.language = s.language;
+    getState().language;
   }
 
   private label(): string {
-    switch (this.state) {
-      case 'connected': return '已连接';
-      case 'connecting': return '连接中…';
-      case 'reconnecting': return '重连中…';
-      case 'disconnected': return '已断线';
-      case 'error': return '连接错误';
-      default: return '未连接';
-    }
+    const labels = this.language === 'en'
+      ? {
+          connected: 'Connected',
+          connecting: 'Connecting…',
+          reconnecting: 'Reconnecting…',
+          disconnected: 'Disconnected',
+          error: 'Connection error',
+          idle: 'Not connected',
+        }
+      : {
+          connected: '已连接',
+          connecting: '连接中…',
+          reconnecting: '重连中…',
+          disconnected: '已断线',
+          error: '连接错误',
+          idle: '未连接',
+        };
+    return labels[this.state] || labels.idle;
   }
 
   private onClick() {
