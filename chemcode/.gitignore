@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment variables (contains secrets)
+.env
+.env.local
+.env.*.local
+
+# User data (contains chat history, API keys, personal info)
+data/users/
+data/sessions/
+data/knowledge/
+data/apikeys.json
+data/uploads/
+data/usage.jsonl
+data/audit.log
+data/errors.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Demo outputs (generated at runtime)
+demo_outputs/
+demo_data/
+
+# RDKit wheel cache
+rdkit_check/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+.vite/
+coverage/
+*.tsbuildinfo
