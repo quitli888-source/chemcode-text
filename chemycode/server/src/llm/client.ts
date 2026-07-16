@@ -53,19 +53,35 @@ const RATE_LIMIT_MAX_TOKENS = 28_000; // ModelArts also has 30K tokens/min limit
 const recentCallTimestamps: number[] = [];
 let recentTokenEstimate = 0;  // Estimated tokens consumed in the current window.
 
+function requiresModelArtsRateLimit(config: Pick<LLMClientConfig, 'provider' | 'apiUrl'>): boolean {
+  if (!RATE_LIMIT_ENABLED) return false;
+  const provider = (config.provider || '').trim().toLowerCase();
+  return provider === 'modelarts' || config.apiUrl.toLowerCase().includes('modelarts');
+}
+
 /**
  * Wait until a rate-limit slot is available, then record the call.
  * This is called BEFORE every fetch() to proactively prevent 429s.
  */
-async function acquireRateLimitSlot(): Promise<void> {
-  if (!RATE_LIMIT_ENABLED) return; // Rate limiting disabled.
+async function acquireRateLimitSlot(config: Pick<LLMClientConfig, 'provider' | 'apiUrl'>, signal?: AbortSignal): Promise<void> {
+  if (!requiresModelArtsRateLimit(config)) return;
   while (true) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException('LLM request aborted', 'AbortError');
+    }
     const now = Date.now();
     // Prune timestamps older than the window.
     while (recentCallTimestamps.length > 0 && now - recentCallTimestamps[0] >= RATE_LIMIT_WINDOW_MS) {
       recentCallTimestamps.shift();
-      // Token estimate also resets when the oldest call exits the window.
-      // This is approximate - real per-call token usage is tracked via onUsage.
+    }
+    // Token usage is tracked approximately for the same rolling window as
+    // request timestamps. Once every recorded request has expired, its token
+    // usage has expired too. Keeping the stale total here makes the token
+    // limiter read recentCallTimestamps[0] from an empty array and wait NaN ms.
+    if (recentCallTimestamps.length === 0) {
+      recentTokenEstimate = 0;
     }
     // Check both call count AND token estimate limits.
     const callSlotAvailable = recentCallTimestamps.length < RATE_LIMIT_MAX_CALLS;
@@ -76,11 +92,18 @@ async function acquireRateLimitSlot(): Promise<void> {
       return;
     }
     // Wait until the oldest timestamp exits the window.
-    const waitMs = RATE_LIMIT_WINDOW_MS - (now - recentCallTimestamps[0]) + 100; // +100ms buffer
-    const actualWait = Math.min(waitMs, RATE_LIMIT_WINDOW_MS);
+    const oldestTimestamp = recentCallTimestamps[0];
+    // A token-only block without a timestamp would be stale state. Recover
+    // immediately instead of entering a zero-delay/NaN retry loop.
+    if (oldestTimestamp === undefined) {
+      recentTokenEstimate = 0;
+      continue;
+    }
+    const waitMs = RATE_LIMIT_WINDOW_MS - (now - oldestTimestamp) + 100; // +100ms buffer
+    const actualWait = Math.max(0, Math.min(waitMs, RATE_LIMIT_WINDOW_MS));
     const reason = !callSlotAvailable ? recentCallTimestamps.length + '/' + RATE_LIMIT_MAX_CALLS + ' calls' : recentTokenEstimate + '/' + RATE_LIMIT_MAX_TOKENS + ' tokens';
-      console.warn('[llm] rate limiter: ' + reason + ' in window, waiting ' + Math.round(actualWait / 1000) + 's...');
-    await sleep(actualWait);
+    console.warn('[llm] rate limiter: ' + reason + ' in window, waiting ' + Math.round(actualWait / 1000) + 's...');
+    await sleep(actualWait, signal);
   }
 }
 
@@ -88,8 +111,26 @@ function isRetryableStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) {
+    return Promise.reject(signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException('LLM request aborted', 'AbortError'));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException('LLM request aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**
@@ -164,7 +205,7 @@ export async function streamChatCompletion(
     // Acquire a rate-limit slot BEFORE EVERY API call (first attempt + retries).
     // This proactively prevents 429s by ensuring we never exceed
     // the provider's per-minute quota across all concurrent calls.
-    await acquireRateLimitSlot();
+    await acquireRateLimitSlot(config, controller.signal);
     try {
       res = await fetch(url, {
         method: 'POST',
@@ -390,7 +431,7 @@ export async function chatCompletion(
     let attempt = 0;
     while (true) {
       // Acquire a rate-limit slot BEFORE EVERY API call (first attempt + retries).
-      await acquireRateLimitSlot();
+      await acquireRateLimitSlot(config, ctrl.signal);
       try {
         res = await fetch(url, {
           method: 'POST',
@@ -456,8 +497,8 @@ export async function chatCompletion(
  * Called from onUsage callback to track the token-per-minute limit
  * (ModelArts enforces BOTH 3 calls/min AND 30K tokens/min).
  */
-export function recordTokenUsage(tokens: number): void {
-  if (!RATE_LIMIT_ENABLED) return; // Rate limiting disabled.
+export function recordTokenUsage(tokens: number, config: Pick<LLMClientConfig, 'provider' | 'apiUrl'>): void {
+  if (!requiresModelArtsRateLimit(config)) return;
   recentTokenEstimate += tokens;
   // Safety: if timestamps are empty but token estimate is high,
   // reset (shouldn't happen in normal operation).

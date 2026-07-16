@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.1 - 2026-07-17
+
+### Fixed
+
+- Prevented the global token limiter from entering a zero-delay `NaN` loop after its rolling request window expired.
+- Made cancellation interrupt requests waiting for a rate-limit slot.
+- Limited the strict 3-request/28K-token rolling quota to ModelArts endpoints instead of throttling DeepSeek and other providers.
+
+### Verified
+
+- Completed the PyGAMD seven-checkpoint AB diblock copolymer workflow with all mandatory confirmations.
+- Ran 15,000 MVP steps and 20,000 production steps on PyGAMD 1.4.8 with an NVIDIA RTX 5070 Laptop GPU.
+- Generated real trajectories, thermodynamic logs, physical-consistency results, RDF/MSD/Rg analyses, and morphology/temperature/energy plots.
+
 ## 1.3.0 - 2026-07-16
 
 ### Added

@@ -529,7 +529,7 @@ export async function runAgentLoop(
             aggregatedUsage.totalTokens += usage.totalTokens;
             aggregatedUsage.reasoningTokens += usage.reasoningTokens ?? 0;
             // Track token usage for the global token-per-minute rate limiter.
-            recordTokenUsage(usage.totalTokens);
+            recordTokenUsage(usage.totalTokens, llm);
           },
           onThinkingDelta: (delta, accumulated) => {
             sendEvent({
@@ -598,7 +598,7 @@ export async function runAgentLoop(
                 aggregatedUsage.totalTokens += usage.totalTokens;
                 aggregatedUsage.reasoningTokens += usage.reasoningTokens ?? 0;
                 // Track token usage for the global token-per-minute rate limiter.
-                recordTokenUsage(usage.totalTokens);
+                recordTokenUsage(usage.totalTokens, llm);
               },
             },
             signal,
