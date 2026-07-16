@@ -47,9 +47,9 @@ subprocess.run(["python", "scripts/analyze_trajectory.py", "traj.*.xml"])
 
 ### Step 0：环境检查
 
-检查 Python 3.11–3.13、PyGAMD 版本、Numba/CUDA、GPU 型号与显存，以及 matplotlib/OVITO。Windows CUDA 13.2 兼容问题可运行 `pygamd_gpu_init.py` 诊断；不要在其他 CUDA 版本上盲目应用补丁。
+运行 `python scripts/check_environment.py --install-missing --json`，检查 Python 3.11–3.13、PyGAMD、Numba/CUDA、NumPy、matplotlib 和 OVITO，并自动安装当前 PyGAMD 工作流缺失的 Python 依赖。安装后必须再次实际 import，并验证 GPU/CUDA 可用。Windows CUDA 13.2 兼容问题可运行 `pygamd_gpu_init.py` 诊断；不要在其他 CUDA 版本上盲目应用补丁。
 
-调用 `pygamd-H1-environment`。证据必须包含实际命令输出、执行设备、缺失依赖和回退方案。批准后才能分析并落实用户需求。
+缺失依赖不得仅记录 warning 或直接使用回退方案进入下一阶段。若安装或 import 验证失败，停留在 H1 并报告具体错误；只有环境报告为 `PASS` 时才调用 `pygamd-H1-environment`。证据必须包含安装命令、实际 import 输出、执行设备和版本。批准后才能分析并落实用户需求。DeepMD、ParmEd 等条件性依赖仅在任务确实使用对应功能时安装。
 
 ### Step 1–2：需求范围与学术关键词
 

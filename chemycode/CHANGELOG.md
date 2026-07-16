@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.2 - 2026-07-17
+
+### Fixed
+
+- Restored the source PyGAMD workflow requirement that missing H1 dependencies must be installed and import-tested before proceeding.
+- Prevented the agent from approving H1 with only a warning and a matplotlib fallback when OVITO is missing.
+
+### Added
+
+- Added `check_environment.py --install-missing --json` to bootstrap and verify PyGAMD, Numba/CUDA, NumPy, Matplotlib, and OVITO.
+- Updated the bundled PyGAMD skill to v0.4.1.
+
+### Verified
+
+- Installed OVITO 3.15.5 and rendered the existing AB diblock production trajectory through the bundled OVITO renderer.
+
 ## 1.3.1 - 2026-07-17
 
 ### Fixed

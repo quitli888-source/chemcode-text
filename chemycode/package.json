@@ -1,6 +1,6 @@
 {
   "name": "chemycode-ui",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "private": true,
   "type": "module",
   "description": "Computational Chemistry AI Agent Platform - Frontend",

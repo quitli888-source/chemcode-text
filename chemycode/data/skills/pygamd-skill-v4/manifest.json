@@ -1,9 +1,13 @@
 {
   "name": "pygamd-skill-v4",
   "description": "PyGAMD GPU 加速介观分子动力学技能，支持 DPD、LJ 流体、聚合物、自组装、相分离、物理一致性检查、轨迹分析和 OVITO 可视化，并执行七阶段人工确认工作流。",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": "Local",
   "scripts": [
+    {
+      "name": "check_environment.py",
+      "description": "检查、安装并实际导入验证 PyGAMD 工作流所需的 Python/GPU/OVITO 依赖。"
+    },
     {
       "name": "example_dpd_simulation.py",
       "workflow": "Run --phase prepare, equilibration, and production separately with mandatory human checkpoints between phases.",

@@ -103,6 +103,14 @@ dpd.setParams(type_i="A", type_j="B", alpha=40.0, sigma=3.0)  # 强排斥
 >
 > - **OVITO**（`pip install ovito`）：RDF / MSD / Rg / CNA / 配位数
 > - **MDAnalysis**（`pip install MDAnalysis`）：通用轨迹分析
+
+首次运行工作流时应执行：
+
+```bash
+python scripts/check_environment.py --install-missing --json
+```
+
+该命令会安装并重新验证 PyGAMD 工作流的必需 Python 依赖。环境未达到 `PASS` 时不得进入 H1 之后的阶段。
 > `scripts/analyze_trajectory.py` 可直接读取 PyGAMD XML 轨迹并生成 RDF、MSD 与 Rg。
 
 ## 参数调优指南
