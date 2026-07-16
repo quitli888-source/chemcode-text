@@ -315,6 +315,14 @@ dump = pygamd.dump.xml(info=snap, group="all", file='trajectory', period=10000)
 app.add(dump)
 ```
 
+## Chemcode 本地脚本
+
+- `scripts/pygamd_gpu_init.py`：仅用于已确认的 Windows CUDA 13.2/Numba 兼容环境。
+- `scripts/example_dpd_simulation.py`：分阶段运行 `prepare`、`equilibration`、`production`。
+- `scripts/physical_consistency_check.py`：执行生产运行前的物理一致性检查。
+- `scripts/analyze_trajectory.py`：直接读取 `trajectory.*.xml` 做 RDF、MSD 和 Rg 分析。
+- `scripts/render_ovito.py`：渲染 GALAMOST XML；OVITO 不可用时改用 matplotlib。
+
 ## 参考资源
 
 - **官方文档**: https://pygamd-v1.readthedocs.io/

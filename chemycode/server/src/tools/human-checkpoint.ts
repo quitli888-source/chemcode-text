@@ -16,7 +16,7 @@ toolRegistry.register(
       properties: {
         checkpointId: {
           type: 'string',
-          description: 'Stable checkpoint identifier from the skill workflow, for example pygamd-H1-environment.',
+          description: 'Stable checkpoint identifier from the skill workflow, for example pygamd-H1-environment or pygamd-H7-results.',
         },
         title: {
           type: 'string',

@@ -1,11 +1,11 @@
 ---
 name: pygamd
-description: PyGAMD分子动力学模拟 - GPU加速DPD模拟技能包。当需要进行耗散粒子动力学(DPD)模拟、聚合物自组装、软物质相分离、或GPU加速分子动力学时触发。触发词：DPD模拟、分子动力学、聚合物模拟、耗散粒子动力学、pygamd、软物质模拟、GPU加速、分子动力学模拟、AB共聚物、自组装。
+description: PyGAMD GPU 加速介观分子动力学工作流，支持 DPD 耗散粒子动力学、Lennard-Jones 流体、聚合物链、布朗动力学、自组装、相分离、轨迹分析、物理一致性检查和 OVITO 可视化。用于用户提出 PyGAMD、DPD 模拟、粗粒化模拟、聚合物模拟、软物质模拟、GPU 分子动力学、相形貌分析或模拟报告任务时。
 ---
 
 # PyGAMD 分子动力学模拟
 
-PyGAMD是吉林大学朱有亮团队开发的Python GPU加速分子动力学软件，特别适合软物质和聚合物DPD（耗散粒子动力学）模拟。
+PyGAMD 是面向软物质与聚合物体系的 GPU 加速分子动力学软件。本技能在 Chemcode 中提供文献检索、MVP、生产级代码、资源评估、分阶段执行、定量分析和可视化工作流。
 
 ## TL;DR
 
@@ -41,30 +41,53 @@ subprocess.run(["python", "scripts/analyze_trajectory.py", "traj.*.xml"])
 - CUDA Toolkit（GPU模式需要）
 - pygamd 1.4.8
 
-## Mandatory human-in-the-loop workflow
+## Chemcode 标准工作流与强制人工确认
 
-The TL;DR and code examples below are reference snippets only. For an actual PyGAMD task, the Agent MUST execute the following five gates in order by calling the `human_checkpoint` tool. A plain-text question does not count as a checkpoint.
+以下流程适配自更新后的 WorkBuddy PyGAMD skill。实际任务必须依次调用 `human_checkpoint`，普通文本提问不算人工确认。“完全访问”和“始终允许”均不能跳过节点。拒绝或超时后停止后续动作，保留当前会话进度并等待用户新指令。
 
-These gates are mandatory even when Full Access is enabled. The Agent must never use "always allow" for them. If a checkpoint is rejected or times out, stop the next action, report the current evidence, and wait for a new user instruction. Do not immediately repeat the same checkpoint.
+### Step 0：环境检查
 
-1. `pygamd-H1-environment` — Environment readiness
-   - Evidence must include Python version, PyGAMD import/version, Numba/CUDA availability, selected execution device, and any fallback.
-   - Next action: create or read the initial configuration.
-2. `pygamd-H2-system` — Initial system acceptance
-   - Evidence must include configuration path, particle count (`npa`), type count (`ntypes`), box dimensions, density, topology counts, and overlap/minimum-distance check.
-   - Next action: define force-field and integration parameters.
-3. `pygamd-H3-preflight` — Parameter and physical-consistency acceptance
-   - This gate may be requested only after `physical_consistency_check.py` passes with zero failed checks.
-   - Evidence must include `alpha`, `sigma`, `gamma`, temperature/FDT relation, bond parameters, `dt`, `rcut`, density, box/skin checks, and the check report summary.
-   - Next action: run a short equilibration. Never start production here.
-4. `pygamd-H4-equilibration` — Equilibration acceptance
-   - Evidence must include equilibration steps, no NaN/Inf, temperature mean/fluctuation, pressure trend, output file paths/sizes, and whether restart data is usable.
-   - Next action: run the stated production plan, including exact steps and output periods.
-5. `pygamd-H5-production` — Production-result acceptance
-   - Evidence must include completed steps, final thermodynamic checks, trajectory/log paths and sizes, warnings, and proposed analyses/exports.
-   - Next action: analyze/export results or finalize the task.
+检查 Python 3.11–3.13、PyGAMD 版本、Numba/CUDA、GPU 型号与显存，以及 matplotlib/OVITO。Windows CUDA 13.2 兼容问题可运行 `pygamd_gpu_init.py` 诊断；不要在其他 CUDA 版本上盲目应用补丁。
 
-The Agent must not collapse equilibration and production into one uninterrupted script, because doing so bypasses H4. Run them as separate phases. Before every checkpoint, show measured values rather than generic statements such as "checked" or "looks good".
+调用 `pygamd-H1-environment`。证据必须包含实际命令输出、执行设备、缺失依赖和回退方案。批准后才能分析并落实用户需求。
+
+### Step 1–2：需求范围与学术关键词
+
+判断任务是否属于 PyGAMD 的 DPD、LJ、聚合物或布朗动力学能力范围，提取 4–7 个英文检索关键词。若不适用，明确推荐 GROMACS、LAMMPS、HOOMD-blue、NAMD 或 AMBER。
+
+调用 `pygamd-H2-scope-keywords`。证据必须包含任务分类、适用性判断、关键词和任何范围警告。批准后才能检索数据库。
+
+### Step 3：Chemcode 文献数据库检索
+
+使用 `database_search` 检索 Chemcode 论文库，合并同一论文结果并记录标题、DOI、年份、相关度和支持的参数/方法。结果为空或相关度低时，把“扩大检索、使用用户资料或降级为通用知识”列入 warnings。
+
+调用 `pygamd-H3-literature`。证据必须包含检索式、命中结果和拟采用的文献依据。批准后才能生成模拟代码。
+
+### Step 4：MVP 脚本
+
+生成最小可运行脚本，规模通常不超过 5000 粒子和 10000 步。必须包含配置生成、力场、积分器、输出、短试运行和明确的文献参数来源。
+
+调用 `pygamd-H4-mvp`。证据必须包含脚本路径、粒子数、步数、关键参数、输出计划、静态检查和短试运行结果。批准后才能扩展为生产级代码。
+
+### Step 5：生产级代码
+
+生成科研规模代码和分析方案，列出它与 MVP 的具体差异。平衡与生产必须拆成独立阶段；生产必须读取经检查的平衡 restart XML。
+
+调用 `pygamd-H5-production-code`。证据必须包含生产脚本路径、规模、步数、资源需求、分析指标、检查策略和 MVP 差异。批准后才能准备执行。
+
+### Step 6：执行前物理检查与资源确认
+
+运行 `physical_consistency_check.py`，必须为 0 failed；同时估算 GPU 时间、显存和磁盘。证据必须列出 `alpha/sigma/gamma` 与 FDT、bond、`dt`、`rcut`、密度、box/skin、输出频率和资源估算。
+
+调用 `pygamd-H6-execution`。该节点只有物理检查成功后才会被 Chemcode 接受。批准后才能运行平衡/生产，或生成远程迁移方案。
+
+### Step 7：结果、可视化与报告
+
+验证运行步数、NaN/Inf、温度/压力趋势、restart 可用性以及轨迹/日志路径和大小。用 `analyze_trajectory.py` 做定量分析；需要形貌图时优先运行 `render_ovito.py`，OVITO 不可用时回退 matplotlib。
+
+调用 `pygamd-H7-results`。证据必须包含真实输出、质量检查、异常、拟执行的分析/可视化和报告内容。批准后才能生成最终分析、图片或汇报文档。
+
+每个节点之前都必须有该阶段新产生的工具证据，不得只写“已检查”。禁止把平衡和生产合并为一次不间断运行，也禁止伪造文献、模拟数据或检查结果。
 
 ## GPU初始化（必须）
 

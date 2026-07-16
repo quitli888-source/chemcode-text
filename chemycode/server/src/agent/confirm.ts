@@ -61,6 +61,8 @@ export class ConfirmManager {
   private allowedTools = new Set<string>();
   /** Full access mode: skip ALL confirmations for this session. */
   private fullAccess = false;
+  /** Ordered workflow progress persisted for the lifetime of this session manager. */
+  private workflowProgress = new Map<string, number>();
 
   constructor(options?: { timeoutMs?: number }) {
     this.timeoutMs = options?.timeoutMs ?? 5 * 60 * 1000;
@@ -100,6 +102,23 @@ export class ConfirmManager {
   /** Whether a pending confirmation may be converted into an allowlist rule. */
   getPendingAllowAlways(confirmId: string): boolean {
     return this.pending.get(confirmId)?.request.allowAlways ?? false;
+  }
+
+  /** Return the next checkpoint index for a named workflow. */
+  getWorkflowCheckpointIndex(workflow: string): number {
+    return this.workflowProgress.get(workflow) ?? 0;
+  }
+
+  /** Advance a named workflow only after its required checkpoint was approved. */
+  advanceWorkflowCheckpoint(workflow: string): number {
+    const next = this.getWorkflowCheckpointIndex(workflow) + 1;
+    this.workflowProgress.set(workflow, next);
+    return next;
+  }
+
+  /** Start a fresh instance of a completed or explicitly restarted workflow. */
+  resetWorkflow(workflow: string): void {
+    this.workflowProgress.set(workflow, 0);
   }
 
   /**

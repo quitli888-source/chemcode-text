@@ -76,4 +76,14 @@ describe('mandatory human confirmations', () => {
     expect(tool?.definition.dangerous).toBe(true);
     expect(tool?.definition.confirmationMode).toBe('required');
   });
+
+  it('persists and resets workflow progress on the session manager', () => {
+    const manager = new ConfirmManager();
+    expect(manager.getWorkflowCheckpointIndex('pygamd')).toBe(0);
+    manager.advanceWorkflowCheckpoint('pygamd');
+    manager.advanceWorkflowCheckpoint('pygamd');
+    expect(manager.getWorkflowCheckpointIndex('pygamd')).toBe(2);
+    manager.resetWorkflow('pygamd');
+    expect(manager.getWorkflowCheckpointIndex('pygamd')).toBe(0);
+  });
 });

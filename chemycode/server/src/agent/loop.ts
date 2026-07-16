@@ -408,13 +408,14 @@ export async function runAgentLoop(
   let totalToolCalls = 0;      // Total tool calls in this run.
   const pygamdCheckpointOrder = [
     'pygamd-H1-environment',
-    'pygamd-H2-system',
-    'pygamd-H3-preflight',
-    'pygamd-H4-equilibration',
-    'pygamd-H5-production',
+    'pygamd-H2-scope-keywords',
+    'pygamd-H3-literature',
+    'pygamd-H4-mvp',
+    'pygamd-H5-production-code',
+    'pygamd-H6-execution',
+    'pygamd-H7-results',
   ];
   const isPygamdWorkflow = config.activeSkill === 'pygamd-skill-v4' || config.activeSkill === 'pygamd';
-  let pygamdCheckpointIndex = 0;
   let pygamdEvidenceUpdated = false;
   let pygamdPhysicalCheckPassed = false;
   // Track files generated during this agent run.
@@ -834,9 +835,14 @@ export async function runAgentLoop(
       const tool = toolRegistry.get(toolName);
       if (isPygamdWorkflow && toolName === 'human_checkpoint') {
         const suppliedId = String(toolParams.checkpointId || '');
-        const expectedId = pygamdCheckpointOrder[pygamdCheckpointIndex];
+        let checkpointIndex = confirmManager?.getWorkflowCheckpointIndex('pygamd') ?? 0;
+        if (suppliedId === pygamdCheckpointOrder[0] && checkpointIndex >= pygamdCheckpointOrder.length) {
+          confirmManager?.resetWorkflow('pygamd');
+          checkpointIndex = 0;
+        }
+        const expectedId = pygamdCheckpointOrder[checkpointIndex];
         const missingEvidence = !pygamdEvidenceUpdated;
-        const missingPreflight = suppliedId === 'pygamd-H3-preflight' && !pygamdPhysicalCheckPassed;
+        const missingPreflight = suppliedId === 'pygamd-H6-execution' && !pygamdPhysicalCheckPassed;
         if (suppliedId !== expectedId || missingEvidence || missingPreflight) {
           const sequenceError = suppliedId !== expectedId
             ? (expectedId
@@ -944,13 +950,19 @@ export async function runAgentLoop(
         toolPermissions,
       );
       if (isPygamdWorkflow && toolName === 'human_checkpoint' && toolResult.success) {
-        pygamdCheckpointIndex++;
+        confirmManager?.advanceWorkflowCheckpoint('pygamd');
         pygamdEvidenceUpdated = false;
       } else if (isPygamdWorkflow && toolResult.success) {
         pygamdEvidenceUpdated = true;
-        if (
+        const ranPhysicalCheck = (
           toolName === 'run_skill_script'
           && String(toolParams.script || '') === 'physical_consistency_check.py'
+        ) || (
+          toolName === 'bash_exec'
+          && String(toolParams.command || '').includes('physical_consistency_check.py')
+        );
+        if (
+          ranPhysicalCheck
           && !/\bfailed\b\s*[:=]\s*[1-9]/i.test(toolResult.content)
           && !/失败:\s*\*\*[1-9]/.test(toolResult.content)
         ) {

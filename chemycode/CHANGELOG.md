@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0 - 2026-07-16
+
+### Added
+
+- Adapted the updated WorkBuddy PyGAMD seven-step research workflow for Chemcode.
+- Added opt-in Windows CUDA 13.2 GPU initialization diagnostics.
+- Added OVITO rendering for PyGAMD/GALAMOST XML trajectories.
+
+### Changed
+
+- Expanded mandatory PyGAMD approval gates from five simulation phases to seven research-workflow stages.
+- Persisted PyGAMD checkpoint progress in the session confirmation manager across chat turns.
+- Preserved Chemcode's corrected XML analysis, strict physical thresholds, and staged simulation runner instead of overwriting them with older source scripts.
+
 ## 1.2.0 - 2026-07-16
 
 ### Added

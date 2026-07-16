@@ -1,7 +1,7 @@
 {
   "name": "pygamd-skill-v4",
-  "description": "PyGAMD DPD 介观模拟技能 — AB两嵌段共聚物相分离、自组装结构预测、轨迹分析、物理一致性检验。使用 run_skill_script 工具执行脚本。",
-  "version": "0.3.0",
+  "description": "PyGAMD GPU 加速介观分子动力学技能，支持 DPD、LJ 流体、聚合物、自组装、相分离、物理一致性检查、轨迹分析和 OVITO 可视化，并执行七阶段人工确认工作流。",
+  "version": "0.4.0",
   "author": "Local",
   "scripts": [
     {
@@ -16,6 +16,14 @@
     {
       "name": "physical_consistency_check.py",
       "description": "物理一致性检验：温度守恒、动量守恒、能量漂移、压力张量验证"
+    },
+    {
+      "name": "pygamd_gpu_init.py",
+      "description": "Windows CUDA 13.2/Numba 兼容性诊断与显式初始化；仅在环境检查确认适用时运行。"
+    },
+    {
+      "name": "render_ovito.py",
+      "description": "读取 PyGAMD GALAMOST XML 轨迹并生成 OVITO 粒子快照及可选相域等值面。"
     }
   ],
   "tools": []
