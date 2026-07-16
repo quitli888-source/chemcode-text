@@ -5,8 +5,6 @@ AB 两嵌段共聚物自组装完整工作流。
 
 API、参数表、黑名单 → 参考 SKILL.md
 """
-import os
-import sys
 import numpy as np
 
 # 固定随机种子（在任何 np.random 调用之前），保证初始配置可复现
@@ -14,13 +12,14 @@ np.random.seed(42)
 
 
 # ---------------------------------------------------------------------------
-# 1. GPU 初始化（必须在 import pygamd 之前）
+# 1. 导入 PyGAMD
 # ---------------------------------------------------------------------------
-sys.path.insert(0, r'<workspace_path>')  # 包含 pygamd_gpu_init.py 的目录
-from pygamd_gpu_init import init_gpu
-init_gpu()  # 返回 True 表示成功
-
-import pygamd
+try:
+    import pygamd
+except ImportError as exc:
+    raise SystemExit(
+        "PyGAMD 未安装。请先按 README 安装 PyGAMD，并确认当前 Python 环境可 import pygamd。"
+    ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +83,9 @@ def run_dpd_simulation(config_file, n_equil=5000, n_prod=20000, dt=0.005):
 
     # DPD 力场（A-A / B-B 同组分排斥 alpha=25，A-B 异组分 alpha=30 触发相分离）
     dpd = pygamd.force.dpd(info=snap, rcut=1.0)
-    dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=4.5)
-    dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=4.5)
-    dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=4.5)
+    dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)
+    dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=3.0)
+    dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=3.0)
 
     # Harmonic 键势（pygamd 不支持 fene）
     bond = pygamd.force.bond(info=snap, func='harmonic')

@@ -28,6 +28,15 @@ export interface LLMMessage {
   tool_calls?: LLMToolCall[];
   tool_call_id?: string;  // for role='tool'
   name?: string;          // for role='tool'
+  /**
+   * Reasoning/thinking content for thinking-capable models (DeepSeek-R1,
+   * Qwen-QwQ, ModelArts reasoning models, etc.).
+   * When the model returns reasoning_content in a response, it MUST be
+   * included in the assistant message when sent back for multi-turn /
+   * tool-call loops — otherwise providers like ModelArts reject with 400
+   * "Missing reasoning_content field in the assistant message".
+   */
+  reasoning_content?: string;
 }
 
 export interface LLMToolCall {
@@ -78,6 +87,12 @@ export interface LLMStreamChunk {
           arguments?: string;
         };
       }[];
+      /**
+       * Reasoning content from thinking-capable models.
+       * Used by DeepSeek-R1, Qwen-QwQ, ModelArts reasoning models, etc.
+       * This is the standard field name in the OpenAI-compatible delta.
+       */
+      reasoning_content?: string;
       /** MiniMax interleaved thinking blocks. */
       reasoning_details?: Array<{
         type: string;

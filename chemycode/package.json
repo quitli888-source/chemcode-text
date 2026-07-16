@@ -1,6 +1,6 @@
 {
   "name": "chemycode-ui",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Computational Chemistry AI Agent Platform - Frontend",
@@ -17,8 +17,11 @@
   "dependencies": {
     "dompurify": "3.1.6",
     "highlight.js": "11.11.1",
+    "jszip": "^3.10.1",
     "lit": "3.3.3",
+    "mammoth": "^1.12.0",
     "marked": "12.0.2",
+    "pdf-parse": "^2.4.5",
     "ssh2": "^1.17.0"
   },
   "devDependencies": {

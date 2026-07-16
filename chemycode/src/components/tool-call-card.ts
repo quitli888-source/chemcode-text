@@ -4,7 +4,7 @@
 // collapsible details panel with the result.
 
 import { LitElement, html, css } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 
 @customElement('chemycode-tool-call-card')
 export class ToolCallCard extends LitElement {
@@ -108,6 +108,3 @@ export class ToolCallCard extends LitElement {
     `;
   }
 }
-
-// Patch: import `state` decorator at the bottom so the file is self-contained.
-import { state } from 'lit/decorators.js';

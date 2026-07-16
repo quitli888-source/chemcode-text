@@ -1,7 +1,7 @@
 {
   "name": "pygamd-skill-v4",
   "description": "PyGAMD DPD 介观模拟技能 — AB两嵌段共聚物相分离、自组装结构预测、轨迹分析、物理一致性检验。使用 run_skill_script 工具执行脚本。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Local",
   "scripts": [
     {

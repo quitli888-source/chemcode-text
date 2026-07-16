@@ -20,9 +20,9 @@ snap = pygamd.snapshot.read("config.xml")
 dpd = pygamd.force.dpd(info=snap, rcut=1.0)
 
 # 设置相互作用参数（正确API）
-dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=4.5)      # A-A
-dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=4.5)      # B-B
-dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=4.5)      # A-B
+dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)      # A-A
+dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=3.0)      # B-B
+dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=3.0)      # A-B
 ```
 
 **参数说明**：
@@ -154,9 +154,9 @@ T = 1.0
 
 # 力场设置（正确API）
 dpd = pygamd.force.dpd(info=snap, rcut=1.0)
-dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=4.5)
-dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=4.5)
-dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=4.5)
+dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=3.0)
 
 # 积分器（正确API）
 integrator = pygamd.integration.gwvv(info=snap, group="all")
@@ -178,7 +178,7 @@ rho = 3.0
 
 # 力场设置（正确API）
 dpd = pygamd.force.dpd(info=snap, rcut=1.0)
-dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=4.5)
+dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)
 
 # 键势（正确API，只支持harmonic）
 bond = pygamd.force.bond(info=snap, func='harmonic')
@@ -201,9 +201,9 @@ app.run(50000)
 
 # 力场设置（正确API）
 dpd = pygamd.force.dpd(info=snap, rcut=1.0)
-dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=4.5)
-dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=4.5)
-dpd.setParams(type_i="A", type_j="B", alpha=40.0, sigma=4.5)  # 强排斥
+dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="A", type_j="B", alpha=40.0, sigma=3.0)  # 强排斥
 
 # 运行平衡（正确API）
 app = pygamd.application.dynamics(snap, dt=0.005)
@@ -280,7 +280,7 @@ app = pygamd.application.dynamics(snap, dt=0.002)
 
 ```python
 # 增大A-B排斥系数（正确API）
-dpd.setParams(type_i="A", type_j="B", alpha=35.0, sigma=4.5)
+dpd.setParams(type_i="A", type_j="B", alpha=35.0, sigma=3.0)
 
 # 增加模拟步数
 app.run(500000)
@@ -303,14 +303,8 @@ T = 0.5
 ### 1. 使用GPU
 
 ```python
-# GPU初始化（必须在import pygamd之前）
-import sys
-sys.path.insert(0, r'<workspace_path>')  # 包含pygamd_gpu_init.py的目录
-from pygamd_gpu_init import init_gpu
-result = init_gpu()  # 返回True表示成功
-
 import pygamd
-# PyGAMD会自动使用GPU
+# GPU 可用性由 PyGAMD 安装及 CUDA 环境决定
 ```
 
 ### 2. 性能优化
@@ -325,4 +319,4 @@ app.add(dump)
 
 - **官方文档**: https://pygamd-v1.readthedocs.io/
 - **GitHub仓库**: https://github.com/PyGAMD/PyGAMD
-- **本地脚本**: `pygamd_gpu_init.py`（GPU初始化）、`pygamd_dpd_gpu.py`（DPD示例）
+- **本地脚本**: `scripts/example_dpd_simulation.py`、`scripts/analyze_trajectory.py`、`scripts/physical_consistency_check.py`

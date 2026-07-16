@@ -39,6 +39,8 @@ export interface ToolExecutionContext {
   userId: string;
   /** Session ID for plan state access. */
   sessionId?: string;
+  /** Parent agent message ID for event correlation. */
+  messageId?: string;
   /** Abort signal for cancellation. */
   signal?: AbortSignal;
   /** Optional: send a streaming event to the client (used by sub-agents). */

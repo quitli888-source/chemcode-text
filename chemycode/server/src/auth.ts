@@ -5,6 +5,9 @@
 import crypto from 'node:crypto';
 
 const SECRET = process.env.AUTH_TOKEN_SECRET || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('[auth] AUTH_TOKEN_SECRET must be set in production. Exiting.');
+  }
   console.warn('[auth] ⚠️  AUTH_TOKEN_SECRET not set, using insecure fallback. Set this env var in production!');
   return 'chemycode-dev-secret';
 })();

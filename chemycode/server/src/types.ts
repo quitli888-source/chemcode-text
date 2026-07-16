@@ -6,7 +6,7 @@ export type CalcType =
   | 'molecular_dynamics' | 'dpd' | 'quantum_chemistry'
   | 'dft' | 'monte_carlo' | 'machine_learning';
 
-export type TaskStatus = 'completed' | 'waiting' | 'error' | 'running';
+export type TaskStatus = 'completed' | 'waiting' | 'error' | 'running' | 'cancelled';
 
 export interface JobStep {
   name: string;
@@ -31,6 +31,8 @@ export interface Task {
   jobs?: JobStep[];
   parameters?: Record<string, string>;
   outputFiles?: string[];
+  sessionId?: string;
+  messageId?: string;
 }
 
 export interface GeneratedFile {
@@ -46,11 +48,15 @@ export interface ChatMessage {
   type: 'user' | 'agent' | 'system' | 'tool';
   content: string;
   timestamp: string;
+  createdAt?: number;
+  completedAt?: number;
   files?: GeneratedFile[];
   code?: string;
   toolCallId?: string;
   toolName?: string;
   toolStatus?: 'pending' | 'running' | 'completed' | 'failed';
+  /** Tool invocation arguments, serialized as JSON string for persistence. */
+  toolArgs?: string;
   thinking?: string;
   /** Token usage metadata (only on agent messages after done). */
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number };
@@ -58,6 +64,7 @@ export interface ChatMessage {
   model?: string;
   /** Context window size in tokens. */
   contextWindow?: number;
+  generatedFiles?: Array<{ name: string; path: string; type: string }>;
 }
 
 export interface KnowledgeEntry {
@@ -67,6 +74,18 @@ export interface KnowledgeEntry {
   content: string;
   tags: string[];
   updatedAt: string;
+  /** Where this knowledge came from */
+  source?: 'manual' | 'chat' | 'upload';
+  /** Original raw content (before LLM processing) */
+  rawContent?: string;
+  /** Creation timestamp */
+  createdAt?: string;
+  /** Whether LLM learning succeeded */
+  learned?: boolean;
+  /** Hierarchical path for tree organization (e.g. "ProjectA/SubTopic"). Empty = root level. */
+  parentPath?: string;
+  /** Importance level: 0=normal, 1=important, 2=critical. */
+  importance?: number;
 }
 
 export interface SkillEntry {
@@ -116,6 +135,8 @@ export interface SessionInfo {
   lastInteractionAt: string;
   messageCount: number;
   status: 'active' | 'idle' | 'archived';
+  /** Workspace directory locked to this session (set on first message). */
+  workdir?: string;
 }
 
 export interface ApiOk<T> { ok: true; data: T }
@@ -125,17 +146,44 @@ export interface ApiErr { ok: false; error: { code: string; message: string; det
 export type StreamEvent =
   | { type: 'text_delta'; messageId: string; delta: string; index: number; topic?: string }
   | { type: 'tool_call_start'; toolCallId: string; toolName: string; args: Record<string, unknown>; messageId: string; topic?: string }
-  | { type: 'tool_call_update'; toolCallId: string; status: 'running' | 'completed' | 'failed'; partialResult?: string; topic?: string }
-  | { type: 'tool_call_end'; toolCallId: string; result?: string; error?: string; files?: GeneratedFile[]; topic?: string }
+  | { type: 'tool_call_update'; toolCallId: string; status: 'running' | 'completed' | 'failed'; partialResult?: string; messageId?: string; topic?: string }
+  | { type: 'tool_call_end'; toolCallId: string; result?: string; error?: string; files?: GeneratedFile[]; messageId?: string; topic?: string }
   | { type: 'thinking'; messageId: string; content: string; topic?: string }
-  | { type: 'status'; status: TaskStatus; message?: string; progress?: number; topic?: string }
+  | { type: 'status'; status: TaskStatus; message?: string; progress?: number; messageId?: string; topic?: string }
   | { type: 'file'; messageId: string; file: GeneratedFile; topic?: string }
-  | { type: 'confirm_request'; messageId: string; prompt: string; options: { id: string; label: string; destructive?: boolean }[]; topic?: string }
-  | { type: 'error'; code: string; message: string; retryable: boolean; topic?: string }
-  | { type: 'done'; messageId: string; finishReason: 'stop' | 'tool_calls' | 'max_tokens' | 'cancelled' | 'error'; topic?: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number }; model?: string; contextWindow?: number; generatedFiles?: Array<{ name: string; path: string; type: string }> };
+  | { type: 'confirm_request'; messageId: string; prompt: string; options: { id: string; label: string; destructive?: boolean }[]; toolName?: string; topic?: string }
+  | { type: 'confirm_timeout'; messageId: string; topic?: string }
+  | { type: 'error'; code: string; message: string; retryable: boolean; messageId?: string; topic?: string }
+  | { type: 'done'; messageId: string; finishReason: 'stop' | 'tool_calls' | 'max_tokens' | 'cancelled' | 'error'; topic?: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number }; model?: string; contextWindow?: number; generatedFiles?: Array<{ name: string; path: string; type: string }> }
+  | { type: 'turn_state'; state: TurnState; messageId?: string; topic?: string };
+
+/**
+ * Explicit turn state machine for the agent loop.
+ * The server emits `turn_state` events whenever the state transitions,
+ * so the frontend can show accurate UI indicators without guessing.
+ *
+ * State transitions:
+ *   idle -> thinking (on user_message)
+ *   thinking -> tool_running (on first tool_call_start)
+ *   thinking -> responding (on first text_delta)
+ *   tool_running -> thinking (on next LLM call after tools)
+ *   tool_running -> awaiting_confirm (on confirm_request)
+ *   awaiting_confirm -> tool_running (on confirm_response accept)
+ *   responding -> done (on done event)
+ *   any -> idle (on done/error/cancel)
+ */
+export type TurnState =
+  | 'idle'
+  | 'thinking'
+  | 'tool_running'
+  | 'awaiting_confirm'
+  | 'responding'
+  | 'done'
+  | 'error';
 
 export type StreamCommand =
-  | { type: 'user_message'; sessionId: string; content: string; model?: string; attachments?: string[]; thinking?: string | boolean; workspace?: string; activeSkill?: string }
-  | { type: 'confirm_response'; confirmId: string; optionId: string }
+  | { type: 'user_message'; sessionId: string; content: string; model?: string; attachments?: string[]; thinking?: string | boolean; workspace?: string; activeSkill?: string; useKnowledge?: boolean; messageId?: string }
+  | { type: 'confirm_response'; confirmId: string; optionId: string; allowTool?: boolean }
+  | { type: 'set_access'; sessionId: string; mode: 'full' | 'confirm'; tools?: string[] }
   | { type: 'cancel'; sessionId: string }
   | { type: 'ping' };

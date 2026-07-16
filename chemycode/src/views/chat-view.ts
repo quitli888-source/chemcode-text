@@ -21,7 +21,12 @@ import {
   dismissConfirm,
   refreshTasks,
   stopGeneration,
+  updateState,
+  updateChatSettings,
+  setFullAccessMode,
+  removeAllowedTool,
 } from '../state';
+import { apiClient as api } from '../api';
 import type { ChatMessage, ConfiguredModel, GeneratedFile } from '../types';
 import '../components/markdown-renderer';
 import '../components/tool-call-card';
@@ -54,7 +59,6 @@ export class ChatView extends LitElement {
     .message.user { align-self: flex-end; flex-direction: row-reverse; }
     .message.agent { align-self: flex-start; }
     .message.system { align-self: center; max-width: 100%; }
-    .message.tool { align-self: flex-start; max-width: 95%; }
 
     .msg-avatar {
       width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
@@ -75,7 +79,6 @@ export class ChatView extends LitElement {
     .message.user .msg-bubble { background: var(--color-accent); color: white; border-bottom-right-radius: 4px; }
     .message.agent .msg-bubble { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-bottom-left-radius: 4px; color: var(--color-text-primary); }
     .message.system .msg-bubble { background: var(--color-background-warning); color: var(--color-text-warning); font-size: var(--font-size-sm); text-align: center; border-radius: 100px; padding: 6px 16px; border: 0.5px solid var(--color-border-warning); }
-    .message.tool .msg-bubble { padding: 0; background: transparent; border: none; }
     .msg-time { font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-top: 4px; padding: 0 4px; }
 
     .msg-meta {
@@ -168,6 +171,58 @@ export class ChatView extends LitElement {
     .confirm-btn.accept:hover { background: var(--color-accent-hover); }
     .confirm-btn.reject { background: transparent; border: 0.5px solid var(--color-border-secondary); color: var(--color-text-secondary); }
     .confirm-btn.reject:hover { background: var(--color-background-tertiary); }
+    .confirm-btn.always-allow { background: transparent; border: 0.5px solid var(--color-accent); color: var(--color-accent); }
+    .confirm-btn.always-allow:hover { background: rgba(99, 102, 241, 0.1); }
+
+    .access-bar {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      padding: 2px 16px;
+      background: var(--color-background-secondary);
+      border-top: 0.5px solid var(--color-border-tertiary);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-tertiary);
+      flex-wrap: wrap;
+    }
+    .access-toggle { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+    .access-toggle input { margin: 0; }
+    .access-label { white-space: nowrap; }
+    .allowed-list { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+    .allowed-chip {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 10px;
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--color-accent);
+      cursor: pointer;
+      font-size: 10px;
+      line-height: 1.6;
+    }
+    .allowed-chip:hover { background: rgba(99, 102, 241, 0.25); }
+
+    .turn-state-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 16px;
+      background: var(--color-background-secondary);
+      border-top: 0.5px solid var(--color-border-tertiary);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-tertiary);
+    }
+    .turn-state-bar .ts-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      animation: ts-pulse 1.4s ease-in-out infinite;
+    }
+    .turn-state-bar.thinking .ts-dot { background: var(--color-accent); }
+    .turn-state-bar.tool_running .ts-dot { background: #f5a623; }
+    .turn-state-bar.awaiting_confirm .ts-dot { background: #e8590c; animation: none; }
+    .turn-state-bar.responding .ts-dot { background: #4a9; }
+    @keyframes ts-pulse {
+      0%, 100% { opacity: 0.4; transform: scale(0.8); }
+      50% { opacity: 1; transform: scale(1.2); }
+    }
 
     .input-area {
       padding: var(--spacing-sm) var(--spacing-lg);
@@ -344,12 +399,76 @@ export class ChatView extends LitElement {
       transition: all 0.15s;
     }
     .empty-hint .example:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
+    .tool-summary {
+      margin-top: 8px;
+      border: 0.5px solid var(--color-border-tertiary);
+      border-radius: var(--border-radius-md);
+      overflow: hidden;
+      background: var(--color-background-secondary);
+    }
+    .tool-summary-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      cursor: pointer;
+      user-select: none;
+      background: var(--color-background-secondary);
+      font-size: var(--font-size-sm);
+      transition: background 0.15s;
+    }
+    .tool-summary-header:hover { background: var(--color-background-tertiary); }
+    .tool-summary-icon { font-size: 13px; }
+    .tool-summary-count { font-weight: 500; color: var(--color-text-primary); }
+    .tool-summary-status {
+      margin-left: auto;
+      font-size: var(--font-size-xs);
+      color: var(--color-text-tertiary);
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .tool-summary-body {
+      padding: 6px 10px;
+      border-top: 0.5px solid var(--color-border-tertiary);
+      background: var(--color-background-primary);
+    }
+    .tool-summary-body chemycode-tool-call-card {
+      margin: 3px 0;
+    }
+
+    .completion-summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: var(--color-background-secondary);
+      border: 0.5px solid var(--color-border-tertiary);
+      border-radius: var(--border-radius-md);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+    }
+    .completion-summary .check { color: var(--color-status-success); font-weight: 500; }
+    .completion-summary .meta-item {
+      padding: 2px 6px;
+      background: var(--color-background-tertiary);
+      border-radius: 4px;
+      font-size: var(--font-size-xs);
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+    }
   `;
 
   @state() private messages: ChatMessage[] = [];
   @state() private showConfirm = false;
   @state() private confirmPrompt = '';
   @state() private confirmOptions: { id: string; label: string; destructive?: boolean }[] = [];
+  @state() private confirmToolName: string | undefined = undefined;
+  @state() private fullAccessMode: boolean = false;
+  @state() private allowedTools: string[] = [];
   @state() private models: ConfiguredModel[] = [];
   @state() private selectedModel: string = '';
   @state() private thinkingMode: 'off' | 'low' | 'medium' | 'high' = 'off';
@@ -362,12 +481,19 @@ export class ChatView extends LitElement {
   @state() private browseLoading = false;
   @state() private pendingAttachments: { id: string; filename: string; size: number }[] = [];
   @state() private typingMessageId: string | null = null;
+  @state() private useKnowledge: boolean = false;
+  @state() private turnState: string = 'idle';
+  @state() private learnedMessageIds: Set<string> = new Set();
+  @state() private learningMessageId: string | null = null;
+  @state() private _timeTick = 0;
+  @state() private expandedToolGroups: Set<string> = new Set();
 
   @query('textarea') private inputEl!: HTMLTextAreaElement;
   @query('.messages-area') private messagesArea?: HTMLElement;
 
   private _unsub: (() => void) | null = null;
   private _scrollObserver: MutationObserver | null = null;
+  private _timeTimer: number | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -376,23 +502,41 @@ export class ChatView extends LitElement {
       const s = getState();
       this.messages = s.chatMessages;
       this.models = s.configuredModels;
-      // Auto-select default model if none selected.
-      if (!this.selectedModel && s.configuredModels.length > 0) {
+      // Sync chat settings from store (survives view switches).
+      // Only auto-select default model if user hasn't chosen one yet.
+      if (!s.selectedModel && s.configuredModels.length > 0 && !this._userPickedModel) {
         const def = s.configuredModels.find((m) => m.isDefault);
-        this.selectedModel = def ? def.name : s.configuredModels[0].name;
+        const autoModel = def ? def.name : s.configuredModels[0].name;
+        this.selectedModel = autoModel;
+        this._userPickedModel = false;
+      } else if (s.selectedModel) {
+        this.selectedModel = s.selectedModel;
       }
+      this.thinkingMode = s.thinkingMode;
+      this.workspacePath = s.workspacePath;
+      this.workspaceLocked = s.workspaceLocked;
+      this.activeSkill = s.activeSkill;
       this.showConfirm = !!s.pendingConfirm;
       if (s.pendingConfirm) {
         this.confirmPrompt = s.pendingConfirm.prompt;
         this.confirmOptions = s.pendingConfirm.options;
+        this.confirmToolName = s.pendingConfirm.toolName;
       }
+      this.fullAccessMode = s.fullAccessMode;
+      this.allowedTools = s.allowedTools;
       this.typingMessageId = s.typingMessageId;
+      this.useKnowledge = s.useKnowledge;
+      this.turnState = (s as { turnState?: string }).turnState || 'idle';
     });
     // If models haven't loaded yet, trigger a refresh (but not during bootstrap).
     if (getState().configuredModels.length === 0 && !getState().isLoading) {
       void this.ensureModelsLoaded();
     }
+    // Re-render every 30s so relative timestamps stay current.
+    this._timeTimer = window.setInterval(() => { this._timeTick++; }, 30_000);
   }
+
+  private _userPickedModel = false;
 
   private async ensureModelsLoaded() {
     try {
@@ -414,6 +558,10 @@ export class ChatView extends LitElement {
     this._unsub = null;
     this._scrollObserver?.disconnect();
     this._scrollObserver = null;
+    if (this._timeTimer !== null) {
+      clearInterval(this._timeTimer);
+      this._timeTimer = null;
+    }
   }
 
   protected firstUpdated(_: PropertyValues) {
@@ -428,9 +576,12 @@ export class ChatView extends LitElement {
 
   protected updated(changed: PropertyValues) {
     // Always auto-scroll to bottom when messages or typing state changes.
-    // Use scrollIntoView on the last element for reliable positioning.
     if (changed.has('messages') || changed.has('typingMessageId')) {
       this.scrollToBottom();
+    }
+    // Re-render every 30s so relative timestamps stay current.
+    if (changed.has('_timeTick')) {
+      // No-op: state change triggers re-render automatically.
     }
   }
 
@@ -438,12 +589,16 @@ export class ChatView extends LitElement {
     if (!this.messagesArea) return;
     requestAnimationFrame(() => {
       if (!this.messagesArea) return;
-      // Try scrollIntoView on the last message element first (most reliable).
-      const lastMsg = this.messagesArea.querySelector('.message:last-child, .typing-indicator:last-child');
+      // Only auto-scroll if the user is already near the bottom (within 80px).
+      // This prevents yanking the view when the user is reading history.
+      const area = this.messagesArea;
+      const distFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
+      if (distFromBottom > 200 && area.scrollTop > 0) return;
+      const lastMsg = area.querySelector('.message:last-child, .typing-indicator:last-child');
       if (lastMsg) {
         lastMsg.scrollIntoView({ behavior: 'instant', block: 'end' });
       } else {
-        this.messagesArea.scrollTop = this.messagesArea.scrollHeight;
+        area.scrollTop = area.scrollHeight;
       }
     });
   }
@@ -484,6 +639,36 @@ export class ChatView extends LitElement {
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   }
 
+  private toggleKnowledge() {
+    this.useKnowledge = !this.useKnowledge;
+    updateState({ useKnowledge: this.useKnowledge });
+  }
+
+  private async learnFromChat(agentMessageId: string) {
+    // Collect all messages up to and including this agent message
+    const idx = this.messages.findIndex((m) => m.id === agentMessageId);
+    if (idx < 0) return;
+    const conversationMessages = this.messages.slice(0, idx + 1)
+      .filter((m) => m.type === 'user' || m.type === 'agent')
+      .map((m) => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content || '' }));
+
+    if (conversationMessages.length < 2) return;
+
+    this.learningMessageId = agentMessageId;
+    try {
+      const sid = getState().activeSessionId || 'unknown';
+      const r = await api.knowledge.learnChat({ sessionId: sid, messages: conversationMessages });
+      if (r.ok && r.value.record) {
+        this.learnedMessageIds.add(agentMessageId);
+        this.requestUpdate();
+      }
+    } catch (e) {
+      console.error('Learn from chat failed:', e);
+    } finally {
+      this.learningMessageId = null;
+    }
+  }
+
   // ---------- File attachments ----------
 
   private async toggleWorkspaceBrowser() {
@@ -514,6 +699,7 @@ export class ChatView extends LitElement {
   private selectWorkspace(dirPath: string) {
     this.workspacePath = dirPath;
     this.showWorkspaceBrowser = false;
+    updateChatSettings({ workspacePath: dirPath });
   }
 
   private renderWorkspaceBrowser() {
@@ -573,11 +759,111 @@ export class ChatView extends LitElement {
     respondToConfirm(optionId);
   }
 
+  /** Accept + add tool to always-allow whitelist. */
+  private onConfirmAlwaysAllow() {
+    respondToConfirm('accept', true);
+  }
+
   private onConfirmDismiss() {
     dismissConfirm();
   }
 
+  /** Toggle full access mode. */
+  private onToggleFullAccess() {
+    setFullAccessMode(!this.fullAccessMode);
+  }
+
+  /** Remove a tool from the always-allow list. */
+  private onRemoveAllowedTool(toolName: string) {
+    removeAllowedTool(toolName);
+  }
+
   // ---------- Render ----------
+
+  private formatRelativeTime(m: ChatMessage): string {
+    if (!m.createdAt) return m.timestamp;
+    const diff = Date.now() - m.createdAt;
+    if (diff < 60_000) return '刚刚';
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+    // Older than 24h — show the original timestamp (with date if available).
+    return m.timestamp;
+  }
+
+  private toggleToolGroup(agentId: string) {
+    const s = new Set(this.expandedToolGroups);
+    if (s.has(agentId)) s.delete(agentId);
+    else s.add(agentId);
+    this.expandedToolGroups = s;
+    this.requestUpdate();
+  }
+
+  /**
+   * Pre-process the flat message list into render-ready groups.
+   * Tool messages are absorbed into their parent agent message so
+   * they render as a collapsible summary instead of individual cards.
+   *
+   * Robust against history entries where tool messages precede any agent
+   * message (orphaned tool messages): they are grouped under a synthetic
+   * "prior session" agent bubble so they don't disappear.
+   */
+  private renderMessages() {
+    const messages = this.messages;
+    const result: ReturnType<typeof html>[] = [];
+    let pendingTools: ChatMessage[] = [];
+
+    const flushOrphanTools = () => {
+      if (pendingTools.length === 0) return;
+      // Render orphaned tool calls under a synthetic minimal agent bubble.
+      result.push(html`
+        <div class="message agent">
+          <div class="msg-avatar">AI</div>
+          <div class="msg-content">
+            <div class="msg-bubble" style="color:var(--color-text-tertiary);font-size:var(--font-size-sm);">历史工具调用</div>
+            ${this.renderToolCallSummary(`orphan-${pendingTools[0].id}`, pendingTools)}
+          </div>
+        </div>
+      `);
+      pendingTools = [];
+    };
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      if (msg.type === 'tool') {
+        pendingTools.push(msg);
+        continue;
+      }
+      if (pendingTools.length > 0) {
+        // Attach pending tools to this agent message if it's an agent; else flush as orphan.
+        if (msg.type === 'agent') {
+          // Tools before an agent message belong to that agent.
+          // (This can happen when history is loaded without the agent placeholder.)
+          // For correctness we just prepend them to the agent's tool list.
+        }
+        flushOrphanTools();
+      }
+
+      if (msg.type === 'agent') {
+        // Collect all subsequent tool messages until the next non-tool message.
+        const toolCalls: ChatMessage[] = [...pendingTools];
+        pendingTools = [];
+        for (let j = i + 1; j < messages.length; j++) {
+          if (messages[j].type === 'tool') {
+            toolCalls.push(messages[j]);
+          } else {
+            break;
+          }
+        }
+        result.push(this.renderAgentMessage(msg, toolCalls));
+      } else {
+        result.push(this.renderMessage(msg));
+      }
+    }
+    // Flush trailing orphan tool messages (if any).
+    flushOrphanTools();
+    return result;
+  }
 
   private renderMessage(m: ChatMessage) {
     if (m.type === 'system') {
@@ -587,48 +873,121 @@ export class ChatView extends LitElement {
         </div>
       `;
     }
-    if (m.type === 'tool') {
-      return html`
-        <div class="message tool">
-          <div class="msg-content">
-            <chemycode-tool-call-card
-              .toolName=${m.toolName || 'tool'}
-              .toolStatus=${m.toolStatus || 'running'}
-              .result=${m.content || ''}
-              .args=${m.code || ''}>
-            </chemycode-tool-call-card>
-            <div class="msg-time">${m.timestamp}</div>
-          </div>
+    // Tool messages are now rendered inside renderAgentMessage — skip here.
+    if (m.type === 'tool') return html``;
+    // Only user messages reach this point; agent messages use renderAgentMessage.
+    return html`
+      <div class="message user">
+        <div class="msg-avatar">U</div>
+        <div class="msg-content">
+          <div class="msg-bubble">${m.content}</div>
+          <div class="msg-time">${this.formatRelativeTime(m)}</div>
         </div>
-      `;
-    }
-    const isUser = m.type === 'user';
-    const isAgent = m.type === 'agent';
+      </div>
+    `;
+  }
+
+  private renderAgentMessage(m: ChatMessage, toolCalls: ChatMessage[]) {
     const isStreaming = this.typingMessageId === m.id;
     const usage = m.usage;
+    const hasTools = toolCalls.length > 0;
+    const isDone = !isStreaming && m.completedAt !== undefined;
+    const isInterrupted = !isStreaming && m.completedAt === undefined && (m.content || m.thinking || hasTools);
+    const showLearn = !isStreaming && m.content && m.content.length > 50 && !this.learnedMessageIds.has(m.id);
+
     return html`
-      <div class="message ${m.type}">
-        <div class="msg-avatar">${isUser ? 'U' : 'AI'}</div>
+      <div class="message agent">
+        <div class="msg-avatar">AI</div>
         <div class="msg-content">
-          ${isUser
-            ? html`<div class="msg-bubble">${m.content}</div>`
-            : html`
-                ${m.thinking
-                  ? html`<chemycode-thinking-block .content=${m.thinking} .live=${isStreaming}></chemycode-thinking-block>`
-                  : ''}
-                <div class="msg-bubble">
-                  ${m.content
-                    ? html`<chemycode-markdown-renderer .source=${m.content}></chemycode-markdown-renderer>${isStreaming ? html`<span class="typing-cursor"></span>` : ''}`
-                    : isStreaming
-                      ? html`<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>`
-                      : ''}
-                </div>
-                ${m.files ? m.files.map((f) => this.renderFile(f)) : ''}
-                ${usage && !isStreaming ? this.renderUsageMeta(usage, m.model, m.contextWindow) : ''}
-                ${!isStreaming && m.generatedFiles && m.generatedFiles.length > 0 ? this.renderOutputSummary(m.generatedFiles) : ''}
-              `}
-          <div class="msg-time">${m.timestamp}</div>
+          ${m.thinking
+            ? html`<chemycode-thinking-block .content=${m.thinking} .live=${isStreaming}></chemycode-thinking-block>`
+            : ''}
+          <div class="msg-bubble">
+            ${m.content
+              ? html`<chemycode-markdown-renderer .source=${m.content}></chemycode-markdown-renderer>${isStreaming ? html`<span class="typing-cursor"></span>` : ''}`
+              : isStreaming
+                ? html`<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>`
+                : ''}
+          </div>
+          ${hasTools ? this.renderToolCallSummary(m.id, toolCalls) : ''}
+          ${m.files ? m.files.map((f) => this.renderFile(f)) : ''}
+          ${isDone ? this.renderCompletionSummary(m, toolCalls.length) : ''}
+          ${usage && !isStreaming ? this.renderUsageMeta(usage, m.model, m.contextWindow) : ''}
+          ${!isStreaming && m.generatedFiles && m.generatedFiles.length > 0 ? this.renderOutputSummary(m.generatedFiles) : ''}
+          ${isInterrupted ? html`
+            <div class="completion-summary" style="background:var(--color-background-warning);border-color:var(--color-border-warning);color:var(--color-text-warning);">
+              <span>⚠️ 响应中断</span>
+              <span class="meta-item">未正常完成</span>
+            </div>
+          ` : ''}
+          ${showLearn ? html`
+            <div style="margin-top:6px;">
+              <button class="tool-btn learn-btn ${this.learningMessageId === m.id ? 'learning' : ''}"
+                @click=${() => this.learnFromChat(m.id)}
+                ?disabled=${this.learningMessageId === m.id}
+                style="font-size:var(--font-size-xs);padding:4px 10px;border-radius:100px;background:var(--color-accent-light);color:var(--color-accent);border:0.5px solid var(--color-accent);cursor:pointer;">
+                ${this.learningMessageId === m.id ? '⏳ 学习中...' : '🧠 学习到知识库'}
+              </button>
+            </div>
+          ` : ''}
+          ${this.learnedMessageIds.has(m.id) ? html`
+            <div style="margin-top:4px;font-size:var(--font-size-xs);color:var(--color-status-success);">✓ 已存入知识库</div>
+          ` : ''}
+          <div class="msg-time">${this.formatRelativeTime(m)}</div>
         </div>
+      </div>
+    `;
+  }
+
+  private renderToolCallSummary(agentId: string, toolCalls: ChatMessage[]) {
+    const expanded = this.expandedToolGroups.has(agentId);
+    const running = toolCalls.filter((t) => t.toolStatus === 'running' || t.toolStatus === 'pending').length;
+    const completed = toolCalls.filter((t) => t.toolStatus === 'completed').length;
+    const failed = toolCalls.filter((t) => t.toolStatus === 'failed').length;
+
+    return html`
+      <div class="tool-summary">
+        <div class="tool-summary-header" @click=${() => this.toggleToolGroup(agentId)}>
+          <span class="tool-summary-icon">🔧</span>
+          <span class="tool-summary-count">${toolCalls.length} 次工具调用</span>
+          <span class="tool-summary-status">
+            ${running > 0 ? html`<span style="color:var(--color-accent);">${running} 执行中</span>` : ''}
+            ${completed > 0 ? html`<span style="color:#4a9;">${completed} 完成</span>` : ''}
+            ${failed > 0 ? html`<span style="color:var(--color-text-danger);">${failed} 失败</span>` : ''}
+          </span>
+          <span class="caret" style="color:var(--color-text-tertiary);font-size:10px;">${expanded ? '▼' : '▶'}</span>
+        </div>
+        ${expanded ? html`
+          <div class="tool-summary-body">
+            ${toolCalls.map((t) => html`
+              <chemycode-tool-call-card
+                .toolName=${t.toolName || 'tool'}
+                .toolStatus=${t.toolStatus || 'running'}
+                .result=${t.content || ''}
+                .args=${t.code || ''}>
+              </chemycode-tool-call-card>
+            `)}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  private renderCompletionSummary(m: ChatMessage, toolCallCount: number) {
+    const duration = m.createdAt && m.completedAt
+      ? `${((m.completedAt - m.createdAt) / 1000).toFixed(1)}s`
+      : null;
+    const fileCount = (m.generatedFiles?.length || 0) + (m.files?.length || 0);
+    const allToolsCompleted = toolCallCount === 0 || m.toolStatus === 'completed' || true; // summary is shown after done only
+
+    return html`
+      <div class="completion-summary">
+        <span class="check">✅ 任务完成</span>
+        ${toolCallCount > 0 ? html`<span class="meta-item">${toolCallCount} 次工具调用</span>` : ''}
+        ${duration ? html`<span class="meta-item">耗时 ${duration}</span>` : ''}
+        ${fileCount > 0 ? html`<span class="meta-item">${fileCount} 个文件</span>` : ''}
+        ${m.usage ? html`<span class="meta-item">${this.formatTokens(m.usage.totalTokens)} tokens</span>` : ''}
+        ${m.model ? html`<span class="meta-item" title="使用模型">${m.model}</span>` : ''}
       </div>
     `;
   }
@@ -767,11 +1126,13 @@ export class ChatView extends LitElement {
   private activateSkill(skillName: string) {
     this.activeSkill = skillName;
     this.showSkillPanel = false;
+    updateChatSettings({ activeSkill: skillName });
     // Silent activation — SKILL.md will be injected on next user message.
   }
 
   private deactivateSkill() {
     this.activeSkill = null;
+    updateChatSettings({ activeSkill: null });
   }
 
   private sendExample(text: string) {
@@ -779,6 +1140,21 @@ export class ChatView extends LitElement {
     this.inputEl.value = text;
     this.inputEl.focus();
     this.autoResize({ target: this.inputEl } as unknown as Event);
+  }
+
+  private turnStateLabel(): { label: string; cls: string } {
+    switch (this.turnState) {
+      case 'thinking': return { label: '思考中...', cls: 'thinking' };
+      case 'tool_running': return { label: '执行工具中...', cls: 'tool_running' };
+      case 'awaiting_confirm': return { label: '等待确认...', cls: 'awaiting_confirm' };
+      case 'responding': return { label: '生成回复中...', cls: 'responding' };
+      default: return { label: '处理中...', cls: 'thinking' };
+    }
+  }
+
+  private renderTurnStateBar() {
+    const { label, cls } = this.turnStateLabel();
+    return html`<div class="turn-state-bar ${cls}"><span class="ts-dot"></span>${label}</div>`;
   }
 
   render() {
@@ -798,7 +1174,7 @@ export class ChatView extends LitElement {
                 </div>
               </div>
             `
-          : this.messages.map((m) => this.renderMessage(m))}
+          : this.renderMessages()}
 
         ${this.showConfirm ? html`
           <div class="confirm-overlay">
@@ -812,13 +1188,34 @@ export class ChatView extends LitElement {
                     ${opt.label}
                   </button>
                 `)}
+                ${this.confirmToolName ? html`
+                  <button class="confirm-btn always-allow" @click=${() => this.onConfirmAlwaysAllow()}>
+                    始终允许${this.confirmToolName}
+                  </button>
+                ` : ''}
                 <button class="confirm-btn reject" @click=${() => this.onConfirmDismiss()}>忽略</button>
               </div>
             </div>
           </div>
         ` : ''}
+        <div class="access-bar">
+          <label class="access-toggle">
+            <input type="checkbox" .checked=${this.fullAccessMode} @change=${() => this.onToggleFullAccess()} />
+            <span class="access-label">${this.fullAccessMode ? '🔓 完全访问（跳过所有确认）' : '🔒 需要确认'}</span>
+          </label>
+          ${this.allowedTools.length > 0 ? html`
+            <span class="allowed-list">
+              已允许: ${this.allowedTools.map((t) => html`
+                <span class="allowed-chip" @click=${() => this.onRemoveAllowedTool(t)} title="点击移除">
+                  ${t} ✕
+                </span>
+              `)}
+            </span>
+          ` : ''}
+        </div>
       </div>
 
+      ${isStreaming ? this.renderTurnStateBar() : ''}
       <div class="input-area">
         ${this.pendingAttachments.length > 0 ? html`
           <div class="attach-strip">
@@ -867,12 +1264,17 @@ export class ChatView extends LitElement {
             </div>
           ` : ''}
           <button class="tool-btn" @click=${() => this.onAttachClick()} title="附件">📎</button>
+          <button class="tool-btn ${this.useKnowledge ? 'skill-btn-active' : ''}"
+            @click=${() => this.toggleKnowledge()}
+            title="${this.useKnowledge ? '知识库已启用：对话时检索你的个人知识' : '启用知识库：对话时注入已有知识'}">
+            📚 知识库 ${this.useKnowledge ? '✓' : ''}
+          </button>
           <div class="model-selector">
             <span>🧠</span>
             <select
               .value=${this.thinkingMode}
-              @change=${(e: Event) => this.thinkingMode = (e.target as HTMLSelectElement).value as typeof this.thinkingMode}>
-              <option value="off">关闭</option>
+              @change=${(e: Event) => { this.thinkingMode = (e.target as HTMLSelectElement).value as typeof this.thinkingMode; updateChatSettings({ thinkingMode: this.thinkingMode }); }}>
+              <option value="off">思考 关</option>
               <option value="low">低</option>
               <option value="medium">中</option>
               <option value="high">高</option>
@@ -883,18 +1285,18 @@ export class ChatView extends LitElement {
             <input type="text" placeholder="工作空间路径（可选）"
               .value=${this.workspacePath}
               ?disabled=${this.workspaceLocked}
-              @input=${(e: Event) => this.workspacePath = (e.target as HTMLInputElement).value}
-              style="width:140px;padding:3px 6px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);background:var(--color-background-primary);color:var(--color-text-primary);font-size:var(--font-size-sm);outline:none;${this.workspaceLocked ? 'opacity:0.7;cursor:not-allowed;' : ''}" />
+              @input=${(e: Event) => { this.workspacePath = (e.target as HTMLInputElement).value; updateChatSettings({ workspacePath: this.workspacePath }); }}
+              style="width:120px;padding:3px 6px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);background:var(--color-background-primary);color:var(--color-text-primary);font-size:var(--font-size-sm);outline:none;${this.workspaceLocked ? 'opacity:0.7;cursor:not-allowed;' : ''}" />
             <button class="tool-btn" @click=${() => this.toggleWorkspaceBrowser()} title="浏览目录">📁</button>
             ${this.workspaceLocked && this.workspacePath ? html`<span style="font-size:11px;color:var(--color-accent);margin-left:2px;" title="工作空间已锁定（首次发送后不可更改）">🔒</span>` : ''}
-            ${this.workspacePath && !this.workspaceLocked ? html`<button class="tool-btn" @click=${() => { this.workspacePath = ''; }} title="清除">✕</button>` : ''}
+            ${this.workspacePath && !this.workspaceLocked ? html`<button class="tool-btn" @click=${() => { this.workspacePath = ''; updateChatSettings({ workspacePath: '' }); }} title="清除">✕</button>` : ''}
           </div>
           ${this.showWorkspaceBrowser ? this.renderWorkspaceBrowser() : ''}
           <div class="model-selector">
             <span>模型</span>
             <select
               .value=${this.selectedModel}
-              @change=${(e: Event) => this.selectedModel = (e.target as HTMLSelectElement).value}>
+              @change=${(e: Event) => { this.selectedModel = (e.target as HTMLSelectElement).value; this._userPickedModel = true; updateChatSettings({ selectedModel: this.selectedModel }); }}>
               ${this.models.length === 0
                 ? html`<option value="">未配置模型</option>`
                 : html`

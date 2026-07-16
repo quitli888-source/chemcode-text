@@ -10,7 +10,7 @@
 //   6. When LLM returns finish_reason=stop → emit done event
 //   7. If context exceeds 80% of context window → compact (summarize old messages)
 
-import { streamChatCompletion, type LLMClientConfig } from '../llm/client.js';
+import { streamChatCompletion, recordTokenUsage, type LLMClientConfig } from '../llm/client.js';
 import type { LLMMessage, LLMToolDefinition, LLMStreamResult } from '../llm/types.js';
 import { toolRegistry } from '../tools/index.js';
 import type { ToolResult, ToolPermissionConfig } from '../tools/types.js';
@@ -18,6 +18,7 @@ import type { AgentRunConfig, AgentEventSender } from './types.js';
 import type { ConfirmManager } from './confirm.js';
 import type { StreamEvent } from '../types.js';
 import { dataDir } from '../storage.js';
+import { logError } from '../errorlog.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -74,12 +75,15 @@ interface AggregatedUsage {
   reasoningTokens: number;
 }
 
-/**
- * Estimate token count for a message.
- * ~4 chars per token for mixed CJK/English (conservative).
- */
+/** Estimate tokens without badly undercounting CJK text. */
 function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  let cjk = 0;
+  let other = 0;
+  for (const char of text) {
+    if (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(char)) cjk++;
+    else other++;
+  }
+  return cjk + Math.ceil(other / 4);
 }
 
 /**
@@ -262,7 +266,7 @@ A memory folder is auto-created at: ${workdir}/.chemycode-memory/
 export async function runAgentLoop(
   config: AgentRunConfig,
   sendEvent: AgentEventSender,
-): Promise<{ content: string; usage: AggregatedUsage; generatedFiles: Array<{ name: string; path: string; type: string }> }> {
+): Promise<{ content: string; usage: AggregatedUsage; generatedFiles: Array<{ name: string; path: string; type: string }>; thinking?: string }> {
   const {
     llm,
     userMessage,
@@ -296,9 +300,26 @@ export async function runAgentLoop(
     messages.push({ role: 'system', content: `IMPORTANT: The user has specified the working directory as: ${workdir}. All file operations MUST use this directory as the base path. Use absolute paths starting with this directory.` });
   }
 
+  // Inject knowledge base context if enabled and available.
+  if (config.knowledgeContext) {
+    messages.push({ role: 'system', content: config.knowledgeContext });
+  }
+
   // Add conversation history.
+  // CRITICAL: carry over reasoning_content from prior assistant messages.
+  // Thinking-capable providers (ModelArts, DeepSeek-R1, Qwen-QwQ) require
+  // EVERY prior assistant message to include reasoning_content if the model
+  // is in thinking mode. Missing it causes 400 "Missing reasoning_content".
+  // We ALWAYS set it (even empty string) because ModelArts validates field
+  // PRESENCE — a missing field triggers 400 regardless of the model's
+  // actual thinking output for that message.
   for (const msg of history) {
-    messages.push({ role: msg.role, content: msg.content });
+    const entry: LLMMessage = { role: msg.role, content: msg.content };
+    if (msg.role === 'assistant') {
+      // Always set reasoning_content — empty string is valid, undefined is not.
+      entry.reasoning_content = msg.reasoning_content || '';
+    }
+    messages.push(entry);
   }
 
   // Add user message with attachment info.
@@ -353,33 +374,122 @@ export async function runAgentLoop(
 
   let finalContent = '';
   const aggregatedUsage: AggregatedUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, reasoningTokens: 0 };
-  const MAX_EMPTY_RETRIES = 10; // More retries to ensure final text is always delivered.
-  const MAX_AUTO_CONTINUE = Infinity; // No limit — keep going until the task is done.
+  // The global rate limiter in client.ts ensures these retries don't cause
+  // cascading 429s — they simply wait for a quota slot.
+  const MAX_EMPTY_RETRIES = 10;
+  const MAX_AUTO_CONTINUE = 8;
+  let compactionSuppressed = false;
+  // No hard tool round limit — complex chemistry workflows may need many
+  // iterations (write→run→debug→rerun). Instead, we use:
+  //   1. Soft nudge at N rounds (remind, don't force)
+  //   2. Stuck detection: same tool failing repeatedly → force summary
+  // This preserves task continuity while preventing infinite loops.
+  const SOFT_NUDGE_ROUNDS = 50;
+  const MAX_CONSECUTIVE_SAME_TOOL_FAILURES = 5;
+  // Detect write→run→fail→write→run→fail cycles where two tools alternate
+  // but neither triggers the same-tool consecutive failure counter.
+  // If the same pair of tools cycles N times with failures, force a summary.
+  const MAX_CYCLE_FAILURES = 3;
   let emptyRetryCount = 0;
   let continueCount = 0;
+  let toolRoundCount = 0;
+  let consecutiveFailures = 0;
+  let lastFailedToolName = '';
+  let nudgeGiven = false;
+  // When true, the next LLM call will NOT include tool definitions, forcing
+  // the LLM to generate a text summary instead of calling more tools.
+  let forceTextOnly = false;
+  // Track tool-call patterns to detect write→run→fail cycles.
+  // When the LLM alternates between file_write and bash_exec but bash_exec
+  // keeps failing, the consecutive-failure counter resets on each successful
+  // file_write. We track the overall pattern instead.
+  let recentToolFailures = 0;  // Count of failures in the last N tool calls.
+  let totalToolCalls = 0;      // Total tool calls in this run.
   // Track files generated during this agent run.
   const generatedFiles: Array<{ name: string; path: string; type: string }> = [];
   // Accumulate content across auto-continue iterations (for persistence).
   let accumulatedContent = '';
+
+  // Track accumulated thinking across all iterations (for persistence).
+  let accumulatedThinking = '';
 
   // Agent loop: LLM → tool_calls → execute → LLM → ...
   while (true) {
 
     // Token-based compaction: if estimated tokens > 80% of context window.
     const estimatedTokens = estimateMessagesTokens(messages);
-    if (estimatedTokens > compactionThreshold) {
+    if (estimatedTokens > compactionThreshold && !compactionSuppressed) {
       console.log(`[agent] context tokens ~${estimatedTokens} > ${compactionThreshold} (80% of ${contextWindow}), compacting...`);
-      await compactMessages(messages, llm, sendEvent, messageId, signal);
+      const compactedTokens = await compactMessages(messages, llm, sendEvent, messageId, compactionThreshold, signal);
+      if (compactedTokens >= estimatedTokens || compactedTokens > compactionThreshold) {
+        compactionSuppressed = true;
+        console.warn(`[agent] compaction made insufficient progress (${estimatedTokens} -> ${compactedTokens}); suppressing repeated compaction for this run`);
+        sendEvent({
+          type: 'status',
+          status: 'running',
+          message: '上下文压缩未能降到目标大小，本轮将停止重复压缩并继续尝试生成。',
+          topic: 'chat',
+        } as StreamEvent);
+      }
     }
 
-    let result: LLMStreamResult;
+    // Defensive: ensure ALL prior messages have reasoning_content field set.
+    // ModelArts validates field PRESENCE on ALL roles (assistant AND tool),
+    // not just assistant messages. Missing it on any message at any index
+    // triggers 400 "Missing reasoning_content at index N".
+    for (const m of messages) {
+      if (m.role === 'assistant' && m.reasoning_content === undefined) {
+        m.reasoning_content = '';
+      }
+      // Some providers also reject tool messages without reasoning_content.
+      // Always set it to empty string for tool messages (harmless for others).
+      if (m.role === 'tool' && m.reasoning_content === undefined) {
+        m.reasoning_content = '';
+      }
+    }
+
+    // Soft nudge: after SOFT_NUDGE_ROUNDS rounds, remind the LLM ONCE to
+    // consider wrapping up. This does NOT force-stop — the LLM can still
+    // continue calling tools if the task genuinely needs more work.
+    if (!nudgeGiven && toolRoundCount >= SOFT_NUDGE_ROUNDS) {
+      console.warn(`[agent] reached SOFT_NUDGE_ROUNDS (${SOFT_NUDGE_ROUNDS}), nudging LLM to consider wrapping up...`);
+      messages.push({
+        role: 'user',
+        content: 'REMINDER: You have made many tool calls. If the task is complete or you are stuck on an error you cannot fix, please provide a text summary to the user now. You can still call more tools if truly needed, but consider if they are necessary.',
+      });
+      nudgeGiven = true;
+    }
+
+    // Force summary: if the LLM has made many tool calls AND never produced
+    // any text content, force it to output a text summary. This catches the
+    // case where the LLM only calls tools without ever generating text.
+    if (nudgeGiven && !accumulatedContent && toolRoundCount >= SOFT_NUDGE_ROUNDS + 5) {
+      console.warn(`[agent] forcing text summary after ${toolRoundCount} rounds with no text output...`);
+      messages.push({
+        role: 'user',
+        content: 'CRITICAL: You have made many tool calls but have not output ANY text to the user. You MUST NOW output a complete text summary of what you have done, what results you got, and what the user should know. Do NOT call any more tools — output text ONLY.',
+      });
+    }
+
+    let result: LLMStreamResult | undefined;
     try {
+      // When forceTextOnly is set, omit tool definitions so the LLM must
+      // generate a text summary instead of calling more tools.
       result = await streamChatCompletion(
         llm,
         messages,
-        tools,
+        forceTextOnly ? [] : tools,
         {
           onTextDelta: (delta, accumulated) => {
+            // Emit turn_state: responding on first text delta.
+            if (accumulated.length === delta.length) {
+              sendEvent({
+                type: 'turn_state',
+                state: 'responding',
+                messageId,
+                topic: 'chat',
+              } as StreamEvent);
+            }
             sendEvent({
               type: 'text_delta',
               messageId,
@@ -405,6 +515,8 @@ export async function runAgentLoop(
             aggregatedUsage.completionTokens += usage.completionTokens;
             aggregatedUsage.totalTokens += usage.totalTokens;
             aggregatedUsage.reasoningTokens += usage.reasoningTokens ?? 0;
+            // Track token usage for the global token-per-minute rate limiter.
+            recordTokenUsage(usage.totalTokens);
           },
           onThinkingDelta: (delta, accumulated) => {
             sendEvent({
@@ -419,14 +531,157 @@ export async function runAgentLoop(
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[agent] LLM call error: ${msg}`);
+      logError({
+        userId: config.userId,
+        sessionId: config.sessionId,
+        messageId: config.messageId,
+        source: 'agent.loop.llmCall',
+        message: msg,
+        stack: e instanceof Error ? e.stack : undefined,
+      });
+
+      // Detect the specific "Missing reasoning_content" 400 error.
+      // This happens when a prior assistant message in the messages array
+      // is missing the reasoning_content field. The defensive fix above
+      // should prevent it, but if it still happens, strip reasoning_content
+      // from ALL messages and retry once (reasoning_content is optional for
+      // the actual generation — only required to be present if the model
+      // is in thinking mode; stripping it forces non-thinking mode).
+      const isReasoningError = /Missing.*reasoning_content/i.test(msg);
+      if (isReasoningError) {
+        console.warn('[agent] reasoning_content error detected, stripping and retrying once...');
+        sendEvent({
+          type: 'thinking',
+          messageId,
+          content: '检测到推理字段兼容性问题，正在自动修复并重试...',
+          topic: 'chat',
+        } as StreamEvent);
+        // Remove reasoning_content from all messages to force non-thinking mode.
+        for (const m of messages) {
+          if (m.role === 'assistant') {
+            delete m.reasoning_content;
+          }
+        }
+        // Retry the LLM call once.
+        try {
+          result = await streamChatCompletion(
+            llm,
+            messages,
+            tools,
+            {
+              onTextDelta: (delta, accumulated) => {
+                sendEvent({
+                  type: 'text_delta',
+                  messageId,
+                  delta,
+                  index: accumulated.length - delta.length,
+                  topic: 'chat',
+                } as StreamEvent);
+              },
+              onUsage: (usage) => {
+                aggregatedUsage.promptTokens += usage.promptTokens;
+                aggregatedUsage.completionTokens += usage.completionTokens;
+                aggregatedUsage.totalTokens += usage.totalTokens;
+                aggregatedUsage.reasoningTokens += usage.reasoningTokens ?? 0;
+                // Track token usage for the global token-per-minute rate limiter.
+                recordTokenUsage(usage.totalTokens);
+              },
+            },
+            signal,
+          );
+          // Success — skip the error return and continue the loop.
+          // eslint-disable-next-line no-undef
+        } catch (e2) {
+          // Retry also failed — fall through to error handling below.
+          const msg2 = e2 instanceof Error ? e2.message : String(e2);
+          console.error(`[agent] retry after reasoning fix also failed: ${msg2}`);
+        }
+        // If retry succeeded, result is set — continue to tool/text processing.
+        if (result) {
+          // Don't fall through to error return; continue the while loop.
+          // Re-process this result: check for tool calls or text.
+          if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
+            finalContent = result.content;
+            accumulatedContent += finalContent;
+            accumulatedThinking = result.thinking || '';
+            break;
+          }
+          // Has tool calls — append assistant message and continue to tool execution.
+          messages.push({
+            role: 'assistant',
+            content: result.content || null,
+            tool_calls: result.toolCalls,
+            reasoning_content: result.thinking || '',
+          });
+          if (result.thinking) accumulatedThinking = result.thinking;
+          // Fall through to tool execution below (don't continue the while loop).
+        }
+      }
+
+      // If we reach here, the error was not recoverable.
+      const isThrottle = /429|TooManyRequests|rate limit|ModelArts\.81101/i.test(msg);
+      const isAbort = /aborted|AbortError/i.test(msg);
+
+      // For throttle errors: DON'T abort the session. The rate limiter in
+      // client.ts already handles 429 with retries. If we still get here,
+      // it means all retries were exhausted. Instead of killing the session,
+      // save progress so far and let the user continue by re-sending.
+      // For other errors: also preserve progress, only abort if truly fatal.
+      const isFatal = /ECONNREFUSED|ENOTFOUND|certificate|ENCRYPTION/i.test(msg);
+
+      // ABORT IS NOT FATAL: WebSocket disconnects should NOT discard the
+      // entire agent run. The tool calls that completed are still valid.
+      // Treat abort like a non-fatal error - preserve everything and return
+      // normally so the user can re-send to continue.
+      if (!isFatal) {
+        // Non-fatal error (throttle, abort, transient network, etc.):
+        // Save accumulated content and thinking so the user gets partial
+        // results, then return normally (not via error event).
+        console.warn(`[agent] non-fatal error, preserving session: ${msg.slice(0, 100)}`);
+        // If we have accumulated content from prior tool rounds, append a
+        // notice about the interruption rather than replacing it entirely.
+        if (accumulatedContent) {
+          // Keep the real content; just append a short notice.
+          const notice = isThrottle
+            ? '\n\n---\n⚠️ 模型接口被限流，部分操作未能完成。已完成的结果如上所示。'
+            : isAbort
+            ? '\n\n---\n⚠️ 操作被中断（可能是连接断开或超时）。已完成的工具调用结果已保留，请重新发送消息继续。'
+            : `\n\n---\n⚠️ 发生临时错误：${msg.slice(0, 150)}。已完成的结果如上所示。`;
+          accumulatedContent += notice;
+        } else {
+          // No content was ever produced — generate a useful summary from
+          // the tool calls that were made, so the user knows what happened.
+          const toolSummary = buildToolSummary();
+          accumulatedContent = isThrottle
+            ? `模型接口被限流，本轮未能完成全部操作。${toolSummary}请稍候重新发送消息继续。`
+            : isAbort
+            ? `操作被中断。${toolSummary}请重新发送消息继续。`
+            : `发生临时错误：${msg.slice(0, 200)}。${toolSummary}请重新发送消息继续。`;
+        }
+        finalContent = accumulatedContent;
+        return { content: finalContent, usage: aggregatedUsage, generatedFiles, thinking: accumulatedThinking };
+      }
+
       sendEvent({
         type: 'error',
-        code: 'LLM_ERROR',
-        message: msg,
-        retryable: false,
+        code: isThrottle ? 'LLM_RATE_LIMITED' : 'LLM_ERROR',
+        message: isThrottle
+          ? '模型接口被限流（每分钟调用次数已达上限）。请稍候再发消息，或在设置中更换/升级模型以解除限制。'
+          : msg,
+        retryable: isThrottle,
         topic: 'chat',
       } as StreamEvent);
-      return { content: finalContent, usage: aggregatedUsage, generatedFiles };
+      return { content: finalContent, usage: aggregatedUsage, generatedFiles, thinking: accumulatedThinking };
+    } // end catch
+
+    // At this point result is guaranteed to be set:
+    // - Normal path: try block succeeded.
+    // - Reasoning error path: retry succeeded and we fell through.
+    // - Other errors: catch block returned already.
+    if (!result) {
+      // Should never happen, but guard for safety.
+      break;
     }
 
     // If no tool calls, we're done.
@@ -435,18 +690,21 @@ export async function runAgentLoop(
       // Accumulate content across auto-continue iterations for full persistence.
       accumulatedContent += finalContent;
 
-      // If LLM returned empty content, retry with a nudge.
-      if (!finalContent && !result.thinking && result.toolCalls.length === 0 && result.finishReason === 'stop') {
+      // If LLM returned empty content but HAS thinking, the model finished
+      // its reasoning but didn't produce a text output. Retry with a nudge.
+      // NOTE: the old condition `!result.thinking` was wrong — when the model
+      // returns thinking but no content, we MUST retry to get text output.
+      if (!finalContent && result.toolCalls.length === 0 && result.finishReason === 'stop') {
         if (emptyRetryCount < MAX_EMPTY_RETRIES) {
           emptyRetryCount++;
-          console.warn(`[agent] LLM returned empty content, retry ${emptyRetryCount}/${MAX_EMPTY_RETRIES}...`);
+          console.warn(`[agent] LLM returned empty content (has thinking: ${!!result.thinking}), retry ${emptyRetryCount}/${MAX_EMPTY_RETRIES}...`);
           sendEvent({
             type: 'thinking',
             messageId,
-            content: `模型未返回内容，正在重试 (${emptyRetryCount}/${MAX_EMPTY_RETRIES})...`,
+            content: `模型返回了思考过程但未输出文字，正在重试 (${emptyRetryCount}/${MAX_EMPTY_RETRIES})...`,
             topic: 'chat',
           } as StreamEvent);
-          messages.push({ role: 'user', content: '你还没有向用户发送任何文字消息。请立即输出一段完整的文字回复，总结你刚才做了什么、结果如何、有哪些发现。这是必须的，不能省略。' });
+          messages.push({ role: 'user', content: '你还没有向用户发送任何文字消息。请立即输出一段完整的文字回复，总结你刚才做了什么、结果如何、有哪些发现。这是必须的，不能省略。不要再用thinking，直接输出文字。' });
           continue;
         }
         console.warn(`[agent] LLM returned empty content after ${MAX_EMPTY_RETRIES} retries, giving up.`);
@@ -466,7 +724,11 @@ export async function runAgentLoop(
             topic: 'chat',
           } as StreamEvent);
           // Add the partial content as assistant message and ask to continue.
-          messages.push({ role: 'assistant', content: finalContent || '' });
+          messages.push({
+            role: 'assistant',
+            content: finalContent || '',
+            reasoning_content: result.thinking || '',
+          });
           messages.push({ role: 'user', content: '请继续完成回复，从上次中断的地方继续。不要重复已经说过的内容。' });
           continue;
         }
@@ -481,24 +743,43 @@ export async function runAgentLoop(
       }
       // Use accumulated content for persistence (covers all auto-continue iterations).
       finalContent = accumulatedContent;
+      accumulatedThinking = result.thinking || '';
       break;
     }
 
     // Append assistant message with tool calls.
-    let assistantContent = result.content || null;
-    if (result.thinking && assistantContent) {
-      assistantContent = `<think>${result.thinking}</think>\n${assistantContent}`;
-    } else if (result.thinking) {
-      assistantContent = `<think>${result.thinking}</think>`;
+    // Set reasoning_content as a separate field (required by ModelArts,
+    // DeepSeek-R1, Qwen-QwQ and other thinking-capable providers).
+    // Do NOT embed thinking in <think> tags inside content — providers
+    // that expect reasoning_content will reject the message if it's missing
+    // as a separate field, and embedding it in content pollutes the text.
+    const assistantContent = result.content || null;
+    const assistantThinking = result.thinking || '';
+    // CRITICAL: accumulate any text content the LLM produced alongside
+    // tool calls. Without this, after many tool rounds the accumulatedContent
+    // stays empty even though the LLM generated text each round. When a
+    // non-fatal error occurs later, accumulatedContent is empty → the user
+    // sees "助手本轮未返回文字内容" instead of the real text.
+    if (result.content && result.content.trim()) {
+      accumulatedContent += result.content;
     }
+    // Always set reasoning_content for assistant messages (even empty),
+    // because ModelArts validates field presence, not value.
     messages.push({
       role: 'assistant',
       content: assistantContent,
       tool_calls: result.toolCalls,
+      reasoning_content: assistantThinking,
     });
+    // Track the latest thinking for persistence.
+    if (assistantThinking) accumulatedThinking = assistantThinking;
+    // Increment tool round counter.
+    toolRoundCount++;
 
     // Execute each tool call.
-    for (const toolCall of result.toolCalls) {
+    // We track tcIdx so that force-summary paths can push placeholder tool
+    // messages for all remaining unprocessed tool_calls before breaking out.
+    for (const [tcIdx, toolCall] of result.toolCalls.entries()) {
       const toolName = toolCall.function.name;
       let toolParams: Record<string, unknown>;
       try {
@@ -513,6 +794,13 @@ export async function runAgentLoop(
           topic: 'chat',
         } as StreamEvent);
       }
+
+      sendEvent({
+        type: 'turn_state',
+        state: 'tool_running',
+        messageId,
+        topic: 'chat',
+      } as StreamEvent);
 
       sendEvent({
         type: 'tool_call_start',
@@ -533,14 +821,26 @@ export async function runAgentLoop(
       // Check if tool is dangerous and requires confirmation.
       const tool = toolRegistry.get(toolName);
       if (tool?.definition.dangerous && confirmManager) {
+        // Emit turn_state: awaiting_confirm before blocking.
+        sendEvent({
+          type: 'turn_state',
+          state: 'awaiting_confirm',
+          messageId,
+          topic: 'chat',
+        } as StreamEvent);
+
+        // Build a human-readable confirmation prompt.
+        const confirmPrompt = buildConfirmPrompt(toolName, toolParams);
+
         const accepted = await confirmManager.requestConfirmation(
-          `工具「${toolName}」请求执行：\n${JSON.stringify(toolParams, null, 2).slice(0, 500)}`,
+          confirmPrompt,
           [
             { id: 'accept', label: '允许执行' },
             { id: 'reject', label: '拒绝', destructive: true },
           ],
           sendEvent,
           messageId,
+          toolName,
         );
 
         if (!accepted) {
@@ -553,11 +853,20 @@ export async function runAgentLoop(
             topic: 'chat',
           } as StreamEvent);
 
+          // After rejection, go back to thinking for next LLM round.
+          sendEvent({
+            type: 'turn_state',
+            state: 'thinking',
+            messageId,
+            topic: 'chat',
+          } as StreamEvent);
+
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
             name: toolName,
             content: rejectMsg,
+            reasoning_content: '',
           });
           continue;
         }
@@ -567,7 +876,7 @@ export async function runAgentLoop(
       const toolResult: ToolResult = await toolRegistry.execute(
         toolName,
         toolParams,
-        { workdir, userId, sessionId, signal, sendEvent },
+        { workdir, userId, sessionId, messageId, signal, sendEvent },
         toolPermissions,
       );
 
@@ -600,22 +909,193 @@ export async function runAgentLoop(
       }
 
       // Feed result back to LLM with clear success/failure indicator.
+      // CRITICAL: when a bash_exec runs a script that produces output but
+      // then crashes with a traceback, the LLM needs to see BOTH the useful
+      // output AND the error. Don't just prefix [ERROR] - include the full
+      // output so the LLM can diagnose the issue.
       const toolFeedback = toolResult.success
         ? toolResult.content
-        : `[ERROR] Tool '${toolName}' failed: ${toolResult.content}\nPlease check the parameters and try again, or use a different approach.`;
+        : `[ERROR] Tool '${toolName}' failed (exit code non-zero). The command produced output below, but ended with an error:\n--- Output ---\n${toolResult.content}\n--- End ---\nPlease analyze the output and error, then fix the issue.`;
+
+      // Track consecutive failures of the SAME tool to detect stuck loops.
+      // If the same tool fails N times in a row, the agent is stuck in a
+      // retry loop and will likely never succeed — force a text summary.
+      totalToolCalls++;
+      if (!toolResult.success) {
+        recentToolFailures++;
+        if (toolName === lastFailedToolName) {
+          consecutiveFailures++;
+        } else {
+          consecutiveFailures = 1;
+          lastFailedToolName = toolName;
+        }
+        // Check 1: same tool failed N times in a row.
+        if (consecutiveFailures >= MAX_CONSECUTIVE_SAME_TOOL_FAILURES) {
+          console.warn(`[agent] tool "${toolName}" failed ${consecutiveFailures} times in a row, forcing summary...`);
+          sendEvent({
+            type: 'thinking',
+            messageId,
+            content: `⚠️ 工具 "${toolName}" 连续失败 ${consecutiveFailures} 次，正在强制生成总结回复...`,
+            topic: 'chat',
+          } as StreamEvent);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            name: toolName,
+            content: toolFeedback,
+            reasoning_content: '',
+          });
+          // CRITICAL: push placeholder tool messages for ALL remaining
+          // unprocessed tool_calls in this batch. The OpenAI API requires
+          // that an assistant message with tool_calls is followed by a tool
+          // message for EVERY tool_call_id before any non-tool message.
+          // Without this, inserting a user("STOP") message mid-batch causes
+          // a 400 "insufficient tool messages following tool_calls message".
+          for (let ri = tcIdx + 1; ri < result.toolCalls.length; ri++) {
+            const skipped = result.toolCalls[ri];
+            sendEvent({
+              type: 'tool_call_end',
+              toolCallId: skipped.id,
+              result: 'Skipped: force summary triggered.',
+              error: 'skipped',
+              topic: 'chat',
+            } as StreamEvent);
+            messages.push({
+              role: 'tool',
+              tool_call_id: skipped.id,
+              name: skipped.function.name,
+              content: 'Tool execution skipped — force summary was triggered by repeated failures.',
+              reasoning_content: '',
+            });
+          }
+          messages.push({
+            role: 'user',
+            content: `IMPORTANT: The tool "${toolName}" has failed ${consecutiveFailures} times in a row with similar errors. STOP retrying this approach. You MUST immediately output a text summary explaining what went wrong, what you tried, and suggest the user how to fix it or try a different approach. Do NOT call any more tools.`,
+          });
+          consecutiveFailures = 0;
+          lastFailedToolName = '';
+          recentToolFailures = 0;
+          // Set forceTextOnly so the next LLM call omits tool definitions,
+          // forcing the LLM to generate a text summary instead of calling
+          // more tools. Then break out of the for-loop to let the while-loop
+          // call the LLM with the "STOP" instruction.
+          forceTextOnly = true;
+          break;
+        }
+        // Check 2: overall failure rate — catches write→run→fail cycles
+        // where file_write succeeds (resets consecutiveFailures) but
+        // bash_exec keeps failing. If >50% of recent calls failed and
+        // we've made enough calls, force a summary.
+        if (recentToolFailures >= MAX_CYCLE_FAILURES * 2 && totalToolCalls >= 10) {
+          const failRate = recentToolFailures / totalToolCalls;
+          if (failRate >= 0.5) {
+            console.warn(`[agent] high failure rate: ${recentToolFailures}/${totalToolCalls} calls failed (${Math.round(failRate * 100)}%), forcing summary...`);
+            sendEvent({
+              type: 'thinking',
+              messageId,
+              content: `⚠️ 工具调用失败率过高（${recentToolFailures}/${totalToolCalls}），可能陷入了修改-运行-失败的循环。正在强制生成总结回复...`,
+              topic: 'chat',
+            } as StreamEvent);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolName,
+              content: toolFeedback,
+              reasoning_content: '',
+            });
+            // CRITICAL: push placeholder tool messages for ALL remaining
+            // unprocessed tool_calls in this batch (same fix as above).
+            for (let ri = tcIdx + 1; ri < result.toolCalls.length; ri++) {
+              const skipped = result.toolCalls[ri];
+              sendEvent({
+                type: 'tool_call_end',
+                toolCallId: skipped.id,
+                result: 'Skipped: force summary triggered.',
+                error: 'skipped',
+                topic: 'chat',
+              } as StreamEvent);
+              messages.push({
+                role: 'tool',
+                tool_call_id: skipped.id,
+                name: skipped.function.name,
+                content: 'Tool execution skipped — force summary was triggered by high failure rate.',
+                reasoning_content: '',
+              });
+            }
+            messages.push({
+              role: 'user',
+              content: `IMPORTANT: You have made ${totalToolCalls} tool calls with a ${Math.round(failRate * 100)}% failure rate. It appears you are stuck in a write→run→fail cycle. STOP and output a text summary: explain what the script does, what error it hits, what you tried to fix it, and ask the user for guidance or suggest alternative approaches. Do NOT call any more tools.`,
+            });
+            consecutiveFailures = 0;
+            lastFailedToolName = '';
+            recentToolFailures = 0;
+            // Set forceTextOnly so the next LLM call omits tool definitions,
+            // forcing the LLM to generate a text summary.
+            forceTextOnly = true;
+            break;
+          }
+        }
+      } else {
+        // Success — reset consecutive failure tracking but DON'T reset
+        // recentToolFailures. A successful file_write followed by a failed
+        // bash_exec is still a failure cycle.
+        consecutiveFailures = 0;
+        lastFailedToolName = '';
+      }
 
       messages.push({
         role: 'tool',
         tool_call_id: toolCall.id,
         name: toolName,
         content: toolFeedback,
+        // ModelArts validates reasoning_content presence on ALL roles.
+        // Always set it (empty string for tool messages).
+        reasoning_content: '',
       });
     }
 
     // Loop continues: LLM will process tool results and respond.
   }
 
-  return { content: finalContent, usage: aggregatedUsage, generatedFiles };
+  return { content: finalContent, usage: aggregatedUsage, generatedFiles, thinking: accumulatedThinking };
+
+  /**
+   * Build a short summary of what tools were called, for use in error
+   * fallback messages when no text content was ever produced.
+   */
+  function buildToolSummary(): string {
+    if (totalToolCalls === 0) return '';
+    const succeeded = totalToolCalls - recentToolFailures;
+    return `已执行 ${totalToolCalls} 次工具调用（${succeeded} 次成功，${recentToolFailures} 次失败），工具调用结果已在对话中显示。`;
+  }
+}
+
+/**
+ * Build a human-readable confirmation prompt for dangerous tool execution.
+ * Replaces raw JSON dump with a structured, understandable description.
+ */
+function buildConfirmPrompt(toolName: string, params: Record<string, unknown>): string {
+  const cmd = String(params.command || '');
+  const skillName = String(params.skill || '');
+  const scriptName = String(params.script || '');
+  const filePath = String(params.path || '');
+
+  if (toolName === 'bash_exec') {
+    // Truncate long commands but show enough to understand the action.
+    const shortCmd = cmd.length > 200 ? cmd.slice(0, 200) + '...' : cmd;
+    return `⚠️ 即将执行 Shell 命令\n\n命令: ${shortCmd}\n\n该操作将直接在你的机器上执行，请确认是否继续。`;
+  }
+  if (toolName === 'run_skill_script') {
+    return `⚠️ 即将运行 Skill 脚本\n\nSkill: ${skillName}\n脚本: ${scriptName}\n\n该操作将执行外部脚本，请确认是否继续。`;
+  }
+  if (toolName === 'file_write') {
+    return `⚠️ 即将写入文件\n\n路径: ${filePath}\n\n该操作可能覆盖已有文件，请确认是否继续。`;
+  }
+  // Generic fallback — still more readable than raw JSON.
+  const summary = Object.entries(params)
+    .map(([k, v]) => `  ${k}: ${typeof v === 'string' ? v.slice(0, 100) : JSON.stringify(v).slice(0, 100)}`)
+    .join('\n');
+  return `⚠️ 工具「${toolName}」请求执行\n\n参数:\n${summary}\n\n请确认是否继续。`;
 }
 
 /**
@@ -634,14 +1114,15 @@ async function compactMessages(
   llm: LLMClientConfig,
   sendEvent: AgentEventSender,
   messageId: string,
+  targetTokens: number,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<number> {
   const KEEP_COUNT = 10;
   const systemMsg = messages[0];
   const oldMessages = messages.slice(1, -KEEP_COUNT);
   const recentMessages = messages.slice(-KEEP_COUNT);
 
-  if (oldMessages.length <= 2) return;
+  if (oldMessages.length <= 2) return estimateMessagesTokens(messages);
 
   // Send prominent compaction notification to frontend.
   sendEvent({
@@ -730,8 +1211,11 @@ async function compactMessages(
 
         chunkSummaries.push(result.content);
       } catch (e) {
-        console.warn(`[agent] compaction chunk ${ci} failed, keeping raw:`, e);
-        chunkSummaries.push(formatted);
+        console.warn(`[agent] compaction chunk ${ci} failed, using bounded local fallback:`, e);
+        const fallback = formatted.length <= 2400
+          ? formatted
+          : `${formatted.slice(0, 1600)}\n...[压缩服务失败，中间内容已省略]...\n${formatted.slice(-800)}`;
+        chunkSummaries.push(`[压缩服务失败后的本地摘要]\n${fallback}`);
       }
     }
 
@@ -749,9 +1233,18 @@ async function compactMessages(
     });
   }
 
-  // Add preserved tool results verbatim.
+  // Preserve tool results, but bound oversized historical outputs so a
+  // failed compaction cannot immediately retrigger forever.
   for (const tr of preservedToolResults) {
-    compactedParts.push(tr);
+    if (typeof tr.content === 'string' && estimateTokens(tr.content) > Math.max(1000, targetTokens / 5)) {
+      const maxChars = Math.max(4000, Math.floor(targetTokens * 0.6));
+      compactedParts.push({
+        ...tr,
+        content: `${tr.content.slice(0, Math.floor(maxChars * 0.7))}\n...[旧工具输出已截断以控制上下文]...\n${tr.content.slice(-Math.floor(maxChars * 0.3))}`,
+      });
+    } else {
+      compactedParts.push(tr);
+    }
   }
 
   // Add recent messages.
@@ -759,6 +1252,16 @@ async function compactMessages(
 
   // Replace messages array in-place.
   messages.splice(0, messages.length, ...compactedParts);
+
+  let compactedTokens = estimateMessagesTokens(messages);
+  while (compactedTokens > targetTokens) {
+    const removableIndex = messages.findIndex(
+      (m, index) => index > 1 && index < messages.length - recentMessages.length && m.role === 'tool',
+    );
+    if (removableIndex < 0) break;
+    messages.splice(removableIndex, 1);
+    compactedTokens = estimateMessagesTokens(messages);
+  }
 
   // Send compaction complete notification.
   sendEvent({
@@ -776,4 +1279,5 @@ async function compactMessages(
   } as StreamEvent);
 
   console.log(`[agent] compacted: ${conversationMessages.length} conversation msgs summarized, ${preservedToolResults.length} tool results preserved, ~${estimateMessagesTokens(messages)} tokens remaining`);
+  return compactedTokens;
 }

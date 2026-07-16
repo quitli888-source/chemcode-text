@@ -14,7 +14,7 @@ export type CalcType =
   | 'monte_carlo'
   | 'machine_learning';
 
-export type TaskStatus = 'completed' | 'waiting' | 'error' | 'running';
+export type TaskStatus = 'completed' | 'waiting' | 'error' | 'running' | 'cancelled';
 
 export type ThemeMode = 'light' | 'dark';
 export type Lang = 'zh' | 'en';
@@ -54,6 +54,8 @@ export interface Task {
   jobs?: JobStep[];
   parameters?: Record<string, string>;
   outputFiles?: string[];
+  sessionId?: string;
+  messageId?: string;
 }
 
 export interface ChatMessage {
@@ -61,6 +63,8 @@ export interface ChatMessage {
   type: 'user' | 'agent' | 'system' | 'tool';
   content: string;
   timestamp: string;
+  createdAt?: number;
+  completedAt?: number;
   files?: GeneratedFile[];
   code?: string;
   toolCallId?: string;
@@ -70,6 +74,7 @@ export interface ChatMessage {
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number };
   model?: string;
   contextWindow?: number;
+  generatedFiles?: Array<{ name: string; path: string; type: string }>;
 }
 
 export interface GeneratedFile {
@@ -87,6 +92,12 @@ export interface KnowledgeEntry {
   content: string;
   tags: string[];
   updatedAt: string;
+  source?: 'manual' | 'chat' | 'upload';
+  rawContent?: string;
+  createdAt?: string;
+  learned?: boolean;
+  parentPath?: string;
+  importance?: number;
 }
 
 export interface SkillEntry {
@@ -160,7 +171,25 @@ export type StreamEvent =
   | StreamEventFile
   | StreamEventConfirmRequest
   | StreamEventError
-  | StreamEventDone;
+  | StreamEventDone
+  | StreamEventTurnState;
+
+/** Explicit turn state from the agent loop. */
+export type TurnState =
+  | 'idle'
+  | 'thinking'
+  | 'tool_running'
+  | 'awaiting_confirm'
+  | 'responding'
+  | 'done'
+  | 'error';
+
+export interface StreamEventTurnState {
+  type: 'turn_state';
+  state: TurnState;
+  messageId?: string;
+  topic?: string;
+}
 
 export interface StreamEventTextDelta {
   type: 'text_delta';
@@ -182,6 +211,7 @@ export interface StreamEventToolCallUpdate {
   toolCallId: string;
   status: 'running' | 'completed' | 'failed';
   partialResult?: string;
+  messageId?: string;
 }
 
 export interface StreamEventToolCallEnd {
@@ -190,6 +220,7 @@ export interface StreamEventToolCallEnd {
   result?: string;
   error?: string;
   files?: GeneratedFile[];
+  messageId?: string;
 }
 
 export interface StreamEventThinking {
@@ -204,6 +235,7 @@ export interface StreamEventStatus {
   message?: string;
   progress?: number;
   topic?: string;
+  messageId?: string;
 }
 
 export interface StreamEventFile {
@@ -217,6 +249,8 @@ export interface StreamEventConfirmRequest {
   messageId: string;
   prompt: string;
   options: { id: string; label: string; destructive?: boolean }[];
+  /** The tool name being confirmed (for "always allow" UI). */
+  toolName?: string;
 }
 
 export interface StreamEventError {
@@ -224,6 +258,7 @@ export interface StreamEventError {
   code: string;
   message: string;
   retryable: boolean;
+  messageId?: string;
 }
 
 export interface StreamEventDone {
@@ -243,8 +278,9 @@ export interface StreamEventDone {
 
 /** Client → server messages on the chat WebSocket. */
 export type StreamCommand =
-  | { type: 'user_message'; sessionId: string; content: string; model?: string; attachments?: string[]; thinking?: string | boolean; workspace?: string; activeSkill?: string }
-  | { type: 'confirm_response'; confirmId: string; optionId: string }
+  | { type: 'user_message'; sessionId: string; content: string; model?: string; attachments?: string[]; thinking?: string | boolean; workspace?: string; activeSkill?: string; useKnowledge?: boolean; messageId?: string }
+  | { type: 'confirm_response'; confirmId: string; optionId: string; allowTool?: boolean }
+  | { type: 'set_access'; sessionId: string; mode: 'full' | 'confirm'; tools?: string[] }
   | { type: 'cancel'; sessionId: string }
   | { type: 'ping' };
 
@@ -277,6 +313,8 @@ export interface SessionInfo {
   lastInteractionAt: string;
   messageCount: number;
   status: 'active' | 'idle' | 'archived';
+  /** Workspace directory locked to this session (set on first message). */
+  workdir?: string;
 }
 
 export interface SessionHistoryResponse {

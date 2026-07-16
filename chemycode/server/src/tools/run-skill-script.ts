@@ -40,7 +40,7 @@ toolRegistry.register(
       },
       required: ['skill', 'script'],
     },
-    dangerous: false,
+    dangerous: true,
   },
   async (params, ctx) => {
     const skillName = String(params.skill);

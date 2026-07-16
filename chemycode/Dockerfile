@@ -15,7 +15,9 @@ RUN pnpm build || npm run build
 FROM node:22-alpine AS backend
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
-RUN corepack enable && (pnpm install --prod --frozen-lockfile || npm install --omit=dev)
+# Install ALL deps (including dev) because tsx is in devDependencies and is
+# needed at runtime to transpile TypeScript server code.
+RUN corepack enable && (pnpm install --frozen-lockfile || npm install)
 COPY --from=frontend /app/dist ./dist
 COPY server ./server
 COPY .env.example ./.env.example

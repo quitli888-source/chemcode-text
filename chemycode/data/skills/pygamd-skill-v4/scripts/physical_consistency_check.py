@@ -58,11 +58,11 @@ DT_MAX_TABLE = {
 }
 
 # 守恒律与涨落判据（研究级）
-NVE_DRIFT_TOL = 1e-5  # 10k 步内 ΔE/E0
-NVT_TEMP_DEV_TOL = 0.02  # |T_mean - T*|/T*
-NVT_TEMP_FLUC_TOL = 0.02  # σ(T)/<T>
-FDT_TOL = 0.02  # |σ² - 2γkBT| / (2γkBT)
-VIRIAL_TOL = 0.01  # |P_meas - P_est|/P_est
+NVE_DRIFT_TOL = 5e-6  # 10k 步内 ΔE/E0 (Round 4)
+NVT_TEMP_DEV_TOL = 0.015  # |T_mean - T*|/T*
+NVT_TEMP_FLUC_TOL = 0.015  # σ(T)/<T>
+FDT_TOL = 0.015  # |σ² - 2γkBT| / (2γkBT)
+VIRIAL_TOL = 0.008  # |P_meas - P_est|/P_est
 
 # 物理稳定性
 RCUT_LMIN_RATIO_MAX = 0.5
@@ -183,7 +183,7 @@ def check_dpd_magnitude(alpha: float, sigma: float, gamma: float,
         results.append(CheckResult(
             name="DPD.sigma 量级",
             ok=False, severity="warn",
-            message=f"σ={sigma} 超出 [{DPD_SIGMA_MIN}, {DPD_SIGMO_MAX if False else DPD_SIGMA_MAX}]；"
+            message=f"σ={sigma} 超出 [{DPD_SIGMA_MIN}, {DPD_SIGMA_MAX}]；"
                     f"涨落-耗散关系需重新校准",
             actual=sigma, expected=[DPD_SIGMA_MIN, DPD_SIGMA_MAX],
         ))
@@ -590,7 +590,7 @@ def run_full_check(
     lx: float, ly: float, lz: float, npa: int, rcut: float = 1.0,
     # 力场
     force_type: str = "dpd",
-    alpha: float = 25.0, sigma: float = 4.5, gamma: float = 4.5,
+    alpha: float = 25.0, sigma: float = 3.0, gamma: float = 4.5,
     kBT: float = DPD_KBT,
     epsilon: float | None = None, sigma_lj: float | None = None,
     bond_k: float | None = None, bond_r0: float | None = None,
@@ -652,7 +652,7 @@ def _demo_report() -> ConsistencyReport:
         lx=L, ly=L, lz=L,
         npa=5000, rcut=1.0,
         force_type="dpd",
-        alpha=25.0, sigma=4.5, gamma=4.5,
+        alpha=25.0, sigma=3.0, gamma=4.5,
         kBT=1.0,
         dt=0.005, mass=1.0, skin=0.3, v_max=5.0,
         energies=[100.0, 100.0001, 100.0002, 99.9999, 100.0001],

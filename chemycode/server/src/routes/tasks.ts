@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { ah, requireAuth, sendOk, sendErr } from '../middleware.js';
 import { store } from '../store.js';
 import type { Task } from '../types.js';
+import { cancelTaskRun } from '../run-registry.js';
 
 function rid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -49,7 +50,17 @@ export function tasksRouter(): Router {
     const data = store.data(req.userId!);
     const t = data.tasks.find((x) => x.id === req.params.id);
     if (!t) return sendErr(res, 'NOT_FOUND', 'Task not found', 404);
-    t.status = 'completed';
+    cancelTaskRun(req.userId!, t.id);
+    t.status = 'cancelled';
+    t.completedAt = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    if (t.jobs) {
+      for (const job of t.jobs) {
+        if (job.status === 'running' || job.status === 'waiting') {
+          job.status = 'cancelled';
+          job.detail = '任务已由用户取消';
+        }
+      }
+    }
     store.commit(req.userId!);
     return sendOk(res, undefined);
   }));

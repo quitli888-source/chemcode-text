@@ -2,7 +2,7 @@
 Demo 2: Generate a DPD input configuration for AB diblock copolymer melt.
 
 This creates:
-  - 2000 particles, 50/50 AB diblock, 10 chains of length 20
+  - 4000 particles, 50/50 AB diblock, 200 chains of length 20
   - Box size 10x10x10 in DPD reduced units
   - Groot-Warren parameters
 """
@@ -78,6 +78,7 @@ with open(out, 'w') as f:
         f.write(f'{b_id+1} {t} {i+1} {j+1}\n')
 
 # --- Write a PyGAMD-style run script ---
+# API aligned with pygamd-skill-v4/SKILL.md (pygamd 1.4.8 correct API)
 script_out = 'demo_dpd_run.py'
 with open(script_out, 'w') as f:
     f.write('''
@@ -85,34 +86,36 @@ import pygamd
 import numpy as np
 
 # --- Initialize ---
-m = pygamd.snapshot.read("diblock_dpd.data")
-m.resize_box(box_l=10.0)
+snap = pygamd.snapshot.read("diblock_dpd.data")
+snap.resize_box(box_l=10.0)
 
 # --- DPD force field (Groot-Warren) ---
 # A-A: a=25, A-B: a=35, B-B: a=25
-ff = pygamd.force.dpd(r_cut=1.0)
-ff.set_param("A", "A", 25.0, 4.5, 4.5)
-ff.set_param("A", "B", 35.0, 4.5, 4.5)
-ff.set_param("B", "B", 25.0, 4.5, 4.5)
-m.add_force(ff)
+dpd = pygamd.force.dpd(info=snap, rcut=1.0)
+dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="A", type_j="B", alpha=35.0, sigma=3.0)
+dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=3.0)
 
 # --- Harmonic bonds for chains ---
-bf = pygamd.force.harmonic_bond()
-bf.set_param("A-A", 1.0, 4.0)   # k=4, r0=1 (in DPD units)
-bf.set_param("B-B", 1.0, 4.0)
-m.add_force(bf)
+bond = pygamd.force.bond(info=snap, func='harmonic')
+bond.setParams(bond_type="bond1", param=[100.0, 1.0])  # k=100, r0=1 (strict range)
 
-# --- Integrator ---
-integ = pygamd.integrator.dpd(vt=1.0, kBT=1.0)
-m.add_integrator(integ)
+# --- Integrator (GWVV, DPD-specific) ---
+integrator = pygamd.integration.gwvv(info=snap, group="all")
+
+# --- Trajectory output (XML format) ---
+dump = pygamd.dump.xml(info=snap, group="all", file='traj', period=1000)
+
+# --- Application ---
+app = pygamd.application.dynamics(snap, dt=0.005)
+app.add(dpd)
+app.add(bond)
+app.add(integrator)
+app.add(dump)
 
 # --- Run ---
-dump = pygamd.dump.dcd("traj.dcd", period=1000)
-m.add_dump(dump)
-
-# Equilibration
-m.run(10000, period=100)
-print("Done. Trajectory -> traj.dcd")
+app.run(10000)
+print("Done. Trajectory -> traj.*.xml")
 ''')
 
 # --- Report ---
@@ -122,7 +125,7 @@ print(f"   ├─ {n_chains} chains × {chain_length} beads = {n_particles} part
 print(f"   ├─ Box: {box_size}³ (DPD reduced units)")
 print(f"   ├─ Number density ρ* = {n_particles / box_size**3:.2f}")
 print(f"   ├─ Particle types: 0=A (n={np.sum(type_id==0)}), 1=B (n={np.sum(type_id==1)})")
-print(f"   ├─ Bonds: {len(bonds)} (harmonic, k=4.0, r0=1.0)")
+print(f"   ├─ Bonds: {len(bonds)} (harmonic, k=100.0, r0=1.0)")
 print(f"   └─ Files: {out}, {script_out}")
 print()
 print("   DPD parameters (Groot-Warren):")

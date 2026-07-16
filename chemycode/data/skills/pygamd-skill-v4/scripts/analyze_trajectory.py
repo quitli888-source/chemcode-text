@@ -1,248 +1,195 @@
 #!/usr/bin/env python3
-"""
-PyGAMD轨迹分析脚本
-分析DPD模拟结果
-"""
+"""Analyze PyGAMD XML trajectories and write RDF/MSD/Rg data and plots."""
 
-import numpy as np
+from __future__ import annotations
+
+import argparse
+import glob
+import math
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
 import matplotlib.pyplot as plt
-import sys
-import os
+import numpy as np
 
-def load_rdf_data(filename):
-    """
-    加载RDF数据
-    """
-    try:
-        data = np.loadtxt(filename, skiprows=1)
-        r = data[:, 0]
-        g_r = data[:, 1]
-        return r, g_r
-    except Exception as e:
-        print(f"加载RDF数据失败: {e}")
-        return None, None
 
-def load_msd_data(filename):
-    """
-    加载MSD数据（time, msd 两列）
-    """
-    try:
-        data = np.loadtxt(filename, skiprows=1)
-        time = data[:, 0]
-        msd = data[:, 1]
-        return time, msd
-    except Exception as e:
-        print(f"加载MSD数据失败: {e}")
-        return None, None
+def _text_rows(node: ET.Element | None, dtype=float) -> np.ndarray:
+    if node is None or not (node.text or "").strip():
+        return np.empty((0,))
+    rows = [line.split() for line in (node.text or "").splitlines() if line.strip()]
+    return np.asarray(rows, dtype=dtype)
 
-def load_rg_data(filename):
-    """
-    加载回转半径数据
-    """
-    try:
-        data = np.loadtxt(filename, skiprows=1)
-        time = data[:, 0]
-        rg = data[:, 1]
-        return time, rg
-    except Exception as e:
-        print(f"加载回转半径数据失败: {e}")
-        return None, None
 
-def calculate_diffusion_coefficient(time, msd):
-    """
-    计算扩散系数
-    D = lim(t→∞) MSD(t) / (6t)
-    """
-    # 选择线性区域（后半部分）
-    n = len(time)
-    start = n // 2
-    
-    # 线性拟合
-    coeffs = np.polyfit(time[start:], msd[start:], 1)
-    slope = coeffs[0]
-    
-    # 扩散系数
-    D = slope / 6.0
-    
-    return D, slope
+def load_xml_frame(filename: str) -> dict[str, np.ndarray]:
+    root = ET.parse(filename).getroot()
+    config = root.find(".//configuration")
+    if config is None:
+        raise ValueError(f"{filename}: missing <configuration>")
+    box_node = config.find("box")
+    if box_node is None:
+        raise ValueError(f"{filename}: missing <box>")
+    box = np.asarray([float(box_node.attrib[k]) for k in ("lx", "ly", "lz")])
+    positions = _text_rows(config.find("position"), float)
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError(f"{filename}: invalid <position> data")
+    type_node = config.find("type")
+    types = np.asarray(
+        [line.strip() for line in (type_node.text or "").splitlines() if line.strip()]
+        if type_node is not None else ["A"] * len(positions),
+        dtype=str,
+    )
+    image = _text_rows(config.find("image"), int)
+    if image.shape == positions.shape:
+        positions = positions + image * box
+    return {"box": box, "positions": positions, "types": types}
 
-def plot_rdf(r_AA, g_AA, r_BB, g_BB, r_AB, g_AB, output_file="rdf_plot.png"):
-    """
-    绘制RDF图
-    """
-    plt.figure(figsize=(10, 6))
-    
-    plt.plot(r_AA, g_AA, 'b-', linewidth=2, label='A-A')
-    plt.plot(r_BB, g_BB, 'r-', linewidth=2, label='B-B')
-    plt.plot(r_AB, g_AB, 'g-', linewidth=2, label='A-B')
-    
-    plt.xlabel('r (DPD单位)', fontsize=12)
-    plt.ylabel('g(r)', fontsize=12)
-    plt.title('径向分布函数 (RDF)', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.xlim(0, 2.0)
-    
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"RDF图已保存到: {output_file}")
-    
-    return plt.gcf()
 
-def plot_msd(time, msd_all, msd_A, msd_B, output_file="msd_plot.png"):
-    """
-    绘制MSD图
-    """
-    plt.figure(figsize=(10, 6))
-    
-    plt.plot(time, msd_all, 'b-', linewidth=2, label='所有粒子')
-    plt.plot(time, msd_A, 'r--', linewidth=2, label='A粒子')
-    plt.plot(time, msd_B, 'g-.', linewidth=2, label='B粒子')
-    
-    # 计算扩散系数
-    D_all, _ = calculate_diffusion_coefficient(time, msd_all)
-    D_A, _ = calculate_diffusion_coefficient(time, msd_A)
-    D_B, _ = calculate_diffusion_coefficient(time, msd_B)
-    
-    plt.xlabel('时间 (DPD单位)', fontsize=12)
-    plt.ylabel('MSD (DPD单位²)', fontsize=12)
-    plt.title(f'均方位移 (MSD)\nD_all={D_all:.4f}, D_A={D_A:.4f}, D_B={D_B:.4f}', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"MSD图已保存到: {output_file}")
-    
-    return plt.gcf()
+def _minimum_image(delta: np.ndarray, box: np.ndarray) -> np.ndarray:
+    return delta - box * np.round(delta / box)
 
-def plot_rg(time, rg, output_file="rg_plot.png"):
-    """
-    绘制回转半径图
-    """
-    plt.figure(figsize=(10, 6))
-    
-    plt.plot(time, rg, 'b-', linewidth=2)
-    
-    # 计算平均值
-    avg_rg = np.mean(rg)
-    std_rg = np.std(rg)
-    
-    plt.axhline(avg_rg, color='r', linestyle='--', 
-                label=f'平均值: {avg_rg:.3f} ± {std_rg:.3f}')
-    
-    plt.xlabel('时间 (DPD单位)', fontsize=12)
-    plt.ylabel('回转半径 (DPD单位)', fontsize=12)
-    plt.title('回转半径随时间变化', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"回转半径图已保存到: {output_file}")
-    
-    return plt.gcf()
 
-def analyze_phase_separation(r_AA, g_AA, r_BB, g_BB, r_AB, g_AB):
-    """
-    分析相分离程度
-    """
-    # 计算第一个峰的位置和高度
-    def find_first_peak(r, g_r):
-        # 找到第一个峰
-        for i in range(1, len(g_r)-1):
-            if g_r[i] > g_r[i-1] and g_r[i] > g_r[i+1]:
-                return r[i], g_r[i]
-        return None, None
-    
-    r_peak_AA, g_peak_AA = find_first_peak(r_AA, g_AA)
-    r_peak_BB, g_peak_BB = find_first_peak(r_BB, g_BB)
-    r_peak_AB, g_peak_AB = find_first_peak(r_AB, g_AB)
-    
+def calculate_rdf(
+    positions: np.ndarray,
+    types: np.ndarray,
+    box: np.ndarray,
+    type_a: str,
+    type_b: str,
+    bins: int = 150,
+    r_max: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    r_max = r_max or float(np.min(box) / 2.0)
+    edges = np.linspace(0.0, r_max, bins + 1)
+    counts = np.zeros(bins, dtype=float)
+    ia = np.flatnonzero(types == type_a)
+    ib = np.flatnonzero(types == type_b)
+    same = type_a == type_b
+
+    for n, i in enumerate(ia):
+        candidates = ia[n + 1 :] if same else ib
+        if len(candidates) == 0:
+            continue
+        distances = np.linalg.norm(_minimum_image(positions[candidates] - positions[i], box), axis=1)
+        counts += np.histogram(distances, bins=edges)[0]
+
+    shell_volume = 4.0 * math.pi / 3.0 * (edges[1:] ** 3 - edges[:-1] ** 3)
+    volume = float(np.prod(box))
+    pair_count = len(ia) * (len(ia) - 1) / 2 if same else len(ia) * len(ib)
+    expected = pair_count * shell_volume / volume
+    rdf = np.divide(counts, expected, out=np.zeros_like(counts), where=expected > 0)
+    return 0.5 * (edges[:-1] + edges[1:]), rdf
+
+
+def calculate_msd(frames: list[dict[str, np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+    initial = frames[0]["positions"]
+    values = []
+    for frame in frames:
+        if len(frame["positions"]) != len(initial):
+            raise ValueError("trajectory particle count changes between frames")
+        delta = frame["positions"] - initial
+        # If image flags were absent, use the nearest periodic displacement.
+        delta = _minimum_image(delta, frame["box"])
+        values.append(float(np.mean(np.sum(delta * delta, axis=1))))
+    return np.arange(len(values), dtype=float), np.asarray(values)
+
+
+def calculate_rg(frames: list[dict[str, np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+    values = []
+    for frame in frames:
+        positions = frame["positions"]
+        center = np.mean(positions, axis=0)
+        values.append(float(np.sqrt(np.mean(np.sum((positions - center) ** 2, axis=1)))))
+    return np.arange(len(values), dtype=float), np.asarray(values)
+
+
+def find_first_peak(r: np.ndarray, values: np.ndarray) -> tuple[float, float] | None:
+    for i in range(1, len(values) - 1):
+        if values[i] > values[i - 1] and values[i] > values[i + 1]:
+            return float(r[i]), float(values[i])
+    return None
+
+
+def analyze_phase_separation(
+    r_aa: np.ndarray,
+    g_aa: np.ndarray,
+    r_bb: np.ndarray,
+    g_bb: np.ndarray,
+    r_ab: np.ndarray,
+    g_ab: np.ndarray,
+) -> float | None:
+    peaks = {
+        "A-A": find_first_peak(r_aa, g_aa),
+        "B-B": find_first_peak(r_bb, g_bb),
+        "A-B": find_first_peak(r_ab, g_ab),
+    }
     print("\n相分离分析:")
-    print(f"  A-A RDF第一个峰: r={r_peak_AA:.3f}, g(r)={g_peak_AA:.3f}")
-    print(f"  B-B RDF第一个峰: r={r_peak_BB:.3f}, g(r)={g_peak_BB:.3f}")
-    print(f"  A-B RDF第一个峰: r={r_peak_AB:.3f}, g(r)={g_peak_AB:.3f}")
-    
-    # 计算相分离指标
-    if g_peak_AA and g_peak_BB and g_peak_AB:
-        # 相分离强度指标
-        phase_separation_index = (g_peak_AA + g_peak_BB) / (2 * g_peak_AB)
-        print(f"  相分离强度指标: {phase_separation_index:.3f}")
-        
-        if phase_separation_index > 1.5:
-            print("  结论: 强相分离")
-        elif phase_separation_index > 1.1:
-            print("  结论: 中等相分离")
+    for label, peak in peaks.items():
+        if peak is None:
+            print(f"  {label} RDF: 未识别到局部峰")
         else:
-            print("  结论: 弱相分离或均相混合")
-    
-    return phase_separation_index
+            print(f"  {label} RDF 第一峰: r={peak[0]:.3f}, g(r)={peak[1]:.3f}")
+    if any(peak is None for peak in peaks.values()) or peaks["A-B"][1] <= 0:
+        print("  结论: 数据不足，无法计算相分离指数")
+        return None
+    index = (peaks["A-A"][1] + peaks["B-B"][1]) / (2.0 * peaks["A-B"][1])
+    print(f"  相分离指数: {index:.3f}")
+    return index
 
-def main():
-    """主函数"""
-    print("="*60)
-    print("PyGAMD轨迹分析")
-    print("="*60)
-    
-    # 检查文件是否存在
-    files_to_check = [
-        'rdf_AA.dat', 'rdf_BB.dat', 'rdf_AB.dat',
-        'msd_all.dat', 'msd_A.dat', 'msd_B.dat',
-        'rg.dat'
-    ]
-    for f in files_to_check:
-        if not os.path.exists(f):
-            print(f"警告: 文件 {f} 不存在")
 
-    # 加载数据
-    print("\n1. 加载数据...")
+def save_series(path: str, x: np.ndarray, y: np.ndarray, header: str) -> None:
+    np.savetxt(path, np.column_stack([x, y]), header=header, comments="")
 
-    # RDF数据（A-A, B-B, A-B 分别存储）
-    r_AA, g_AA = load_rdf_data('rdf_AA.dat')
-    r_BB, g_BB = load_rdf_data('rdf_BB.dat')
-    r_AB, g_AB = load_rdf_data('rdf_AB.dat')
 
-    # MSD数据（全体/A类/B类 分别存储）
-    time_msd, msd_all = load_msd_data('msd_all.dat')
-    _, msd_A = load_msd_data('msd_A.dat')
-    _, msd_B = load_msd_data('msd_B.dat')
+def plot_series(path: str, x: np.ndarray, series: list[tuple[str, np.ndarray]], xlabel: str, ylabel: str) -> None:
+    plt.figure(figsize=(9, 5.5))
+    for label, y in series:
+        plt.plot(x, y, label=label)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    if len(series) > 1:
+        plt.legend()
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    plt.savefig(path, dpi=200)
+    plt.close()
 
-    # 回转半径数据
-    time_rg, rg = load_rg_data('rg.dat')
-    
-    # 分析和绘图
-    print("\n2. 分析数据...")
-    
-    # 绘制RDF
-    if r_AA is not None:
-        plot_rdf(r_AA, g_AA, r_BB, g_BB, r_AB, g_AB)
-        analyze_phase_separation(r_AA, g_AA, r_BB, g_BB, r_AB, g_AB)
-    
-    # 绘制MSD
-    if time_msd is not None:
-        plot_msd(time_msd, msd_all, msd_A, msd_B)
-        
-        # 计算扩散系数
-        D, _ = calculate_diffusion_coefficient(time_msd, msd_all)
-        print(f"\n扩散系数:")
-        print(f"  D = {D:.6f} (DPD单位)")
-    
-    # 绘制回转半径
-    if time_rg is not None:
-        plot_rg(time_rg, rg)
-        
-        # 统计信息
-        avg_rg = np.mean(rg)
-        std_rg = np.std(rg)
-        print(f"\n回转半径:")
-        print(f"  平均值: {avg_rg:.3f} ± {std_rg:.3f} (DPD单位)")
-    
-    print("\n分析完成！")
-    print("输出文件:")
-    print("  - rdf_plot.png: 径向分布函数图")
-    print("  - msd_plot.png: 均方位移图")
-    print("  - rg_plot.png: 回转半径图")
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("trajectory", nargs="?", default="trajectory.*.xml", help="XML file or glob")
+    parser.add_argument("--bins", type=int, default=150)
+    args = parser.parse_args()
+
+    files = sorted(glob.glob(args.trajectory))
+    if not files and Path(args.trajectory).is_file():
+        files = [args.trajectory]
+    if not files:
+        parser.error(f"no trajectory files matched: {args.trajectory}")
+
+    frames = [load_xml_frame(name) for name in files]
+    last = frames[-1]
+    available = list(dict.fromkeys(last["types"].tolist()))
+    if len(available) < 2:
+        raise ValueError(f"RDF phase analysis requires at least two particle types; found {available}")
+    type_a, type_b = available[:2]
+
+    r_aa, g_aa = calculate_rdf(last["positions"], last["types"], last["box"], type_a, type_a, args.bins)
+    r_bb, g_bb = calculate_rdf(last["positions"], last["types"], last["box"], type_b, type_b, args.bins)
+    r_ab, g_ab = calculate_rdf(last["positions"], last["types"], last["box"], type_a, type_b, args.bins)
+    time, msd = calculate_msd(frames)
+    _, rg = calculate_rg(frames)
+
+    save_series("rdf_AA.dat", r_aa, g_aa, "r g_r")
+    save_series("rdf_BB.dat", r_bb, g_bb, "r g_r")
+    save_series("rdf_AB.dat", r_ab, g_ab, "r g_r")
+    save_series("msd_all.dat", time, msd, "frame msd")
+    save_series("rg.dat", time, rg, "frame rg")
+    plot_series("rdf_plot.png", r_aa, [("A-A", g_aa), ("B-B", g_bb), ("A-B", g_ab)], "r", "g(r)")
+    plot_series("msd_plot.png", time, [("all", msd)], "frame", "MSD")
+    plot_series("rg_plot.png", time, [("all", rg)], "frame", "Rg")
+    analyze_phase_separation(r_aa, g_aa, r_bb, g_bb, r_ab, g_ab)
+    print(f"\n已分析 {len(files)} 个轨迹帧，输出 RDF/MSD/Rg 数据与图像。")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -28,12 +28,13 @@ import type {
   ConnectionState,
   UserProfile,
 } from './types';
-import type { StreamEvent } from './api/types';
+import type { StreamEvent, TurnState } from './api/types';
 import { getActiveClient, getApiMode, onApiModeChange } from './api/mock';
 import { stream } from './api/stream';
 import { ApiError, onAuthEvent, setToken } from './api/client';
-import { showError } from './components/toast';
+import { showError, showToast } from './components/toast';
 import { simulateChatStream } from './api/mock';
+import { isStreamEventForMessage } from './api/event-correlation';
 
 // ---------- State shape ----------
 
@@ -53,8 +54,19 @@ export interface AppState {
 
   // Session / chat
   activeSessionId: string | null;
-  sessions: Array<{ id: string; title: string; lastInteractionAt: string; messageCount: number; model?: string }>;
-  pendingConfirm: { prompt: string; options: { id: string; label: string; destructive?: boolean }[]; messageId: string } | null;
+  sessions: Array<{ id: string; title: string; lastInteractionAt: string; messageCount: number; model?: string; workspace?: string; workdir?: string }>;
+  pendingConfirm: { prompt: string; options: { id: string; label: string; destructive?: boolean }[]; messageId: string; toolName?: string } | null;
+
+  // Access control
+  fullAccessMode: boolean;       // skip ALL confirmations
+  allowedTools: string[];        // tools whitelisted for auto-approve
+
+  // Chat settings (persisted across view switches via store)
+  selectedModel: string;
+  thinkingMode: 'off' | 'low' | 'medium' | 'high';
+  workspacePath: string;
+  workspaceLocked: boolean;
+  activeSkill: string | null;
 
   // Settings (persisted to localStorage)
   theme: ThemeMode;
@@ -69,11 +81,15 @@ export interface AppState {
   currentUser: UserProfile | null;
   apiMode: 'mock' | 'real';
   typingMessageId: string | null;     // the agent message currently being streamed
+  useKnowledge: boolean;              // whether to inject knowledge base into agent context
+  /** Explicit turn state from the backend, replaces guessing. */
+  turnState: TurnState;
 }
 
 const LS_THEME = 'chemycode.theme';
 const LS_LANG = 'chemycode.lang';
 const LS_FONT = 'chemycode.font';
+const LS_CHAT_SETTINGS = 'chemycode.chatSettings';
 
 function readLS<T>(key: string, fallback: T): T {
   if (typeof localStorage === 'undefined') return fallback;
@@ -130,6 +146,15 @@ let state: AppState = {
   activeSessionId: null,
   sessions: [],
   pendingConfirm: null,
+  fullAccessMode: false,
+  allowedTools: [],
+
+  // Chat settings — read from localStorage so they survive page refresh.
+  selectedModel: readLS<{ selectedModel?: string }>(LS_CHAT_SETTINGS, {}).selectedModel || '',
+  thinkingMode: readLS<{ thinkingMode?: 'off' | 'low' | 'medium' | 'high' }>(LS_CHAT_SETTINGS, { thinkingMode: 'off' }).thinkingMode || 'off',
+  workspacePath: readLS<{ workspacePath?: string }>(LS_CHAT_SETTINGS, {}).workspacePath || '',
+  workspaceLocked: false,  // Not persisted — workspace lock is per-session.
+  activeSkill: readLS<{ activeSkill?: string | null }>(LS_CHAT_SETTINGS, {}).activeSkill || null,
 
   theme: readLS<ThemeMode>(LS_THEME, 'light'),
   language: readLS<Lang>(LS_LANG, 'zh'),
@@ -142,6 +167,8 @@ let state: AppState = {
   currentUser: null,
   apiMode: getApiMode(),
   typingMessageId: null,
+  useKnowledge: false,
+  turnState: 'idle' as TurnState,
 };
 
 // Apply settings as early as possible to avoid a flash.
@@ -164,6 +191,39 @@ export function updateState(partial: Partial<AppState>): void {
 export function subscribe(fn: () => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+// ---------- Chat settings persistence ----------
+
+/**
+ * Save chat settings (selected model, thinking mode, workspace, skill) to
+ * localStorage so they survive page refreshes and view switches.
+ */
+function persistChatSettings(): void {
+  if (typeof localStorage === 'undefined') return;
+  const settings = {
+    selectedModel: state.selectedModel,
+    thinkingMode: state.thinkingMode,
+    workspacePath: state.workspacePath,
+    activeSkill: state.activeSkill,
+  };
+  try {
+    localStorage.setItem(LS_CHAT_SETTINGS, JSON.stringify(settings));
+  } catch { /* ignore quota errors */ }
+}
+
+/**
+ * Update chat settings in the store and persist to localStorage.
+ */
+export function updateChatSettings(settings: {
+  selectedModel?: string;
+  thinkingMode?: 'off' | 'low' | 'medium' | 'high';
+  workspacePath?: string;
+  workspaceLocked?: boolean;
+  activeSkill?: string | null;
+}): void {
+  updateState(settings);
+  persistChatSettings();
 }
 
 // ---------- Helpers ----------
@@ -256,7 +316,7 @@ export async function loadAll(): Promise<void> {
     patch.skills = skillsR.value.value;
   }
   if (knowledgeR.status === 'fulfilled' && knowledgeR.value.ok) {
-    patch.knowledge = knowledgeR.value.value;
+    patch.knowledge = knowledgeR.value.value.records;
   }
   if (modelsR.status === 'fulfilled' && modelsR.value.ok) {
     patch.configuredModels = modelsR.value.value;
@@ -268,6 +328,9 @@ export async function loadAll(): Promise<void> {
     // Soft-fail: don't block UI on status; the error will surface via toast elsewhere.
   }
   updateState(patch);
+
+  // Restore workspace assignments from localStorage.
+  restoreSessionWorkspaces();
 
   // If no active session, create one.
   if (!state.activeSessionId) {
@@ -329,6 +392,20 @@ export async function logout(): Promise<void> {
 // ---------- Navigation ----------
 
 export function setView(view: PageView): void {
+  // When switching to chat view, also restore the current session's messages
+  // if they were lost (e.g. after createNewSession cleared them).
+  // This ensures the chat view always shows the active session's content.
+  if (view === 'chat' && state.activeSessionId && state.chatMessages.length === 0) {
+    // Reload history for the active session so the chat view has content.
+    // Fire-and-forget; the view will update via the store subscription.
+    void (async () => {
+      const client = getActiveClient();
+      const histR = await client.sessions.history(state.activeSessionId!);
+      if (histR.ok) {
+        updateState({ chatMessages: histR.value.messages || [] });
+      }
+    })();
+  }
   updateState({ currentView: view, selectedTaskId: view === 'task-detail' ? state.selectedTaskId : null });
 }
 
@@ -423,7 +500,7 @@ export async function searchKnowledge(query: string): Promise<KnowledgeEntry[]> 
   const r = await client.knowledge.search(query);
   if (r.ok) return r.value;
   showError(r.error.message);
-  return [];
+  return state.knowledge;
 }
 
 export function getKnowledge(id: string): KnowledgeEntry | undefined {
@@ -521,7 +598,27 @@ function handleStreamEvent(
   getPendingToolCall: () => { id: string; name: string } | null,
   cbs: StreamEventCallbacks,
 ): void {
+  const now = Date.now();
   switch (ev.type) {
+    case 'turn_state': {
+      // Explicit turn state from the backend — replaces guessing.
+      const ts = ev.state;
+      updateState({ turnState: ts });
+      // Derive typingMessageId from turn_state:
+      // active states -> agentMsgId; terminal states -> null.
+      if (ts === 'idle' || ts === 'done' || ts === 'error') {
+        if (state.typingMessageId === agentMsgId) {
+          updateState({ typingMessageId: null });
+        }
+      } else {
+        // thinking / tool_running / awaiting_confirm / responding -> active
+        if (!state.typingMessageId) {
+          updateState({ typingMessageId: agentMsgId });
+        }
+      }
+      // awaiting_confirm is handled by confirm_request event which sets pendingConfirm.
+      break;
+    }
     case 'thinking':
       updateMessage(agentMsgId, {
         thinking: (state.chatMessages.find((m) => m.id === agentMsgId)?.thinking || '') + ev.content,
@@ -534,6 +631,7 @@ function handleStreamEvent(
         type: 'tool',
         content: '',
         timestamp: ts,
+        createdAt: now,
         toolCallId: ev.toolCallId,
         toolName: ev.toolName,
         toolStatus: 'running',
@@ -575,22 +673,56 @@ function handleStreamEvent(
     }
     case 'confirm_request':
       updateState({
-        pendingConfirm: { prompt: ev.prompt, options: ev.options, messageId: agentMsgId },
+        pendingConfirm: { prompt: ev.prompt, options: ev.options, messageId: agentMsgId, toolName: ev.toolName },
       });
       break;
-    case 'error':
+    case 'error': {
       showError(ev.message);
-      // Fatal errors (AGENT_ERROR, LLM_ERROR) should end the typing state.
-      // The backend does not send a 'done' event after these errors.
-      if (ev.code === 'AGENT_ERROR' || ev.code === 'LLM_ERROR' || ev.code === 'MAX_ROUNDS') {
+      const isFatal = ev.code === 'AGENT_ERROR' || ev.code === 'LLM_ERROR' || ev.code === 'LLM_RATE_LIMITED' || ev.code === 'MAX_ROUNDS';
+      if (isFatal) {
+        // The agent message may have accumulated text from tool rounds.
+        // Check if it has content — if not, show the error message in the
+        // agent bubble so the user knows what happened.
+        const cur = state.chatMessages.find((m) => m.id === agentMsgId);
+        const existingContent = cur?.content || '';
+        if (!existingContent.trim()) {
+          // No content was ever produced — show the error in the agent bubble.
+          updateMessage(agentMsgId, {
+            content: `⚠️ ${ev.message}`,
+            completedAt: Date.now(),
+          });
+        } else {
+          // Content exists — just mark as interrupted.
+          updateMessage(agentMsgId, {
+            content: existingContent + '\n\n---\n⚠️ ' + ev.message,
+            completedAt: Date.now(),
+          });
+        }
         cbs.onDone();
+      } else {
+        // Non-fatal: surface to the user but keep streaming.
+        addChatMessage({
+          id: `err-${Date.now()}`,
+          type: 'system',
+          content: `⚠️ ${ev.message}`,
+          timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+          createdAt: Date.now(),
+        });
       }
       break;
+    }
     case 'status':
       // Status updates from the agent (e.g. task created, compacting).
       // Refresh tasks to pick up new task from sidebar.
       if (ev.topic === 'tasks') {
         void refreshTasks();
+      }
+      // Do NOT push status messages into the chat message list.
+      // Previously every status event (context compaction, etc.) created a
+      // system chat bubble, flooding the conversation. Instead, show a
+      // transient toast notification that auto-dismisses.
+      if (ev.message) {
+        showToast(ev.message, { kind: 'info', durationMs: 3000 });
       }
       break;
     case 'done':
@@ -606,7 +738,10 @@ function handleStreamEvent(
           model: ev.model,
           contextWindow: ev.contextWindow,
           generatedFiles: ev.generatedFiles,
+          completedAt: Date.now(),
         });
+      } else {
+        updateMessage(agentMsgId, { completedAt: Date.now() });
       }
       cbs.onDone();
       // Refresh tasks after agent completes (tasks may have been created/updated).
@@ -623,6 +758,7 @@ export async function sendMessage(content: string, opts: { model?: string; attac
     type: 'user',
     content,
     timestamp: ts,
+    createdAt: Date.now(),
   };
   addChatMessage(userMsg);
 
@@ -653,6 +789,7 @@ export async function sendMessage(content: string, opts: { model?: string; attac
       type: 'agent',
       content: '',
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      createdAt: Date.now(),
     });
     updateState({ typingMessageId: agentMsgId });
 
@@ -678,6 +815,7 @@ export async function sendMessage(content: string, opts: { model?: string; attac
     type: 'agent',
     content: '',
     timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    createdAt: Date.now(),
   });
   updateState({ typingMessageId: agentMsgId });
 
@@ -691,6 +829,16 @@ export async function sendMessage(content: string, opts: { model?: string; attac
     // a topic:'chat'-only subscription.
     topic: '*',
     onEvent: (ev) => {
+      if (!isStreamEventForMessage(ev, agentMsgId)) return;
+      if (state.activeSessionId !== sid) {
+        const fatalError = ev.type === 'error'
+          && ['AGENT_ERROR', 'LLM_ERROR', 'LLM_RATE_LIMITED', 'MAX_ROUNDS'].includes(ev.code);
+        if (ev.type === 'done' || fatalError) {
+          unsub?.();
+          void refreshTasks();
+        }
+        return;
+      }
       handleStreamEvent(ev, agentMsgId, ts, () => pendingToolCall, {
         setPendingToolCall: (tc) => { pendingToolCall = tc; },
         clearPendingToolCall: () => { pendingToolCall = null; },
@@ -718,6 +866,12 @@ export async function sendMessage(content: string, opts: { model?: string; attac
     thinking: opts.thinking,
     workspace: opts.workspace,
     activeSkill: opts.activeSkill,
+    useKnowledge: state.useKnowledge,
+    // Send the agent message id we already created so the backend keys all
+    // events and the confirm request with the SAME id the frontend uses.
+    // Without this the confirm round-trip can never match (frontend id
+    // != backend id) and the agent loop hangs even when the user accepts.
+    messageId: agentMsgId,
   });
   if (!sent) {
     // Message was queued (WebSocket not yet open).
@@ -729,7 +883,7 @@ export async function sendMessage(content: string, opts: { model?: string; attac
   }
 }
 
-export function respondToConfirm(optionId: string): void {
+export function respondToConfirm(optionId: string, allowTool?: boolean): void {
   const confirm = state.pendingConfirm;
   if (!confirm) return;
 
@@ -738,10 +892,20 @@ export function respondToConfirm(optionId: string): void {
   addChatMessage({
     id: `msg-${Date.now()}`,
     type: 'user',
-    content: optionId === 'accept' ? '确认，继续执行' : '已拒绝',
+    content: optionId === 'accept'
+      ? (allowTool && confirm.toolName ? `始终允许「${confirm.toolName}」，继续执行` : '确认，继续执行')
+      : '已拒绝',
     timestamp: ts,
+    createdAt: Date.now(),
   });
   updateState({ pendingConfirm: null });
+
+  // Track locally: add tool to allowed list.
+  if (allowTool && confirm.toolName && optionId === 'accept') {
+    if (!state.allowedTools.includes(confirm.toolName)) {
+      updateState({ allowedTools: [...state.allowedTools, confirm.toolName] });
+    }
+  }
 
   if (state.apiMode === 'mock') {
     // Mock mode: simulate a follow-up agent response.
@@ -751,6 +915,7 @@ export function respondToConfirm(optionId: string): void {
       type: 'agent',
       content: '',
       timestamp: ts,
+      createdAt: Date.now(),
     });
     updateState({ typingMessageId: agentMsgId });
 
@@ -775,43 +940,31 @@ export function respondToConfirm(optionId: string): void {
   }
 
   // Real mode: send a confirm_response command.
-  // Reuse the existing agent message ID so follow-up events
-  // (text_delta, tool_call_*, done) update the same message.
+  // The original subscription created in sendMessage() is still active during
+  // a confirm wait (the turn has not emitted 'done' yet), so it will receive
+  // the agent's post-confirmation follow-up events. Re-subscribing here would
+  // create a SECOND subscription and duplicate every text_delta delivery.
   const agentMsgId = confirm.messageId;
   updateState({ typingMessageId: agentMsgId });
-
-  // Re-subscribe to the stream because the original subscription
-  // from sendMessage() was removed when the first 'done' fired.
-  let pendingToolCall: { id: string; name: string } | null = null;
-  let unsub: (() => void) | null = null;
-  unsub = stream.subscribe({
-    topic: '*',
-    onEvent: (ev) => {
-      handleStreamEvent(ev, agentMsgId, ts, () => pendingToolCall, {
-        setPendingToolCall: (tc) => { pendingToolCall = tc; },
-        clearPendingToolCall: () => { pendingToolCall = null; },
-        onDone: () => {
-          updateState({ typingMessageId: null });
-          unsub?.();
-        },
-      });
-    },
-    onState: (s) => {
-      if (s === 'disconnected' || s === 'error') {
-        updateState({ typingMessageId: null });
-        unsub?.();
-      }
-    },
-  });
 
   stream.send({
     type: 'confirm_response',
     confirmId: confirm.messageId,
     optionId,
+    allowTool,
   });
 }
 
 export function dismissConfirm(): void {
+  // P0 FIX: Send confirm_response with 'reject' to backend so the
+  // ConfirmManager's Promise resolves. Otherwise the agent loop hangs forever.
+  const confirm = state.pendingConfirm;
+  if (!confirm) return;
+  stream.send({
+    type: 'confirm_response',
+    confirmId: confirm.messageId,
+    optionId: 'reject',
+  });
   updateState({ pendingConfirm: null });
 }
 
@@ -821,19 +974,51 @@ export function stopGeneration(): void {
   const sessionId = state.activeSessionId;
   if (!sessionId) return;
   stream.send({ type: 'cancel', sessionId });
-  updateState({ typingMessageId: null });
-  // Clean up the pending confirm if any.
+  // P0 FIX: Also resolve any pending confirm to prevent the agent loop
+  // from hanging on an unresolved Promise after cancel.
   if (state.pendingConfirm) {
+    stream.send({
+      type: 'confirm_response',
+      confirmId: state.pendingConfirm.messageId,
+      optionId: 'reject',
+    });
     updateState({ pendingConfirm: null });
+  }
+  updateState({ typingMessageId: null });
+}
+
+// ---------- Access control ----------
+
+/** Toggle full access mode (skip all confirmations). */
+export function setFullAccessMode(enabled: boolean): void {
+  const sessionId = state.activeSessionId;
+  updateState({ fullAccessMode: enabled });
+  if (sessionId && state.apiMode === 'real') {
+    stream.send({ type: 'set_access', sessionId, mode: enabled ? 'full' : 'confirm' });
+  }
+  // If disabling, also clear the local allowedTools list.
+  if (!enabled) {
+    updateState({ allowedTools: [] });
+  }
+}
+
+/** Clear a specific tool from the always-allow whitelist. */
+export function removeAllowedTool(toolName: string): void {
+  const sessionId = state.activeSessionId;
+  updateState({ allowedTools: state.allowedTools.filter((t) => t !== toolName) });
+  if (sessionId && state.apiMode === 'real') {
+    stream.send({ type: 'set_access', sessionId, mode: 'confirm', tools: [toolName] });
   }
 }
 
 // ---------- Sessions ----------
 
-export async function createNewSession(): Promise<void> {
+export async function createNewSession(opts?: { title?: string; workspace?: string }): Promise<void> {
   const client = getActiveClient();
-  const r = await client.sessions.create({});
+  const r = await client.sessions.create(opts || {});
   if (r.ok) {
+    // Attach workspace to session if provided.
+    const sessionWithWs = opts?.workspace ? { ...r.value, workspace: opts.workspace } : r.value;
     updateState({
       activeSessionId: r.value.id,
       chatMessages: [],
@@ -841,31 +1026,116 @@ export async function createNewSession(): Promise<void> {
     });
     // Add to sessions list.
     const sessions = state.sessions || [];
-    updateState({ sessions: [r.value, ...sessions] });
+    updateState({ sessions: [sessionWithWs, ...sessions] });
   } else {
     showError(r.error.message);
   }
 }
 
+/**
+ * Move a session to a workspace (or remove from workspace if null).
+ * This is a client-side grouping — sessions are grouped by workspace
+ * in the sidebar. The workspace field is stored in localStorage.
+ */
+export function setSessionWorkspace(sessionId: string, workspace: string | null): void {
+  const sessions = (state.sessions || []).map((s) =>
+    s.id === sessionId ? { ...s, workspace: workspace || undefined } : s
+  );
+  updateState({ sessions });
+  persistSessionWorkspaces(sessions);
+}
+
+/**
+ * Rename a session's workspace folder. All sessions in the old workspace
+ * get moved to the new name.
+ */
+export function renameWorkspace(oldName: string, newName: string): void {
+  const sessions = (state.sessions || []).map((s) =>
+    s.workspace === oldName ? { ...s, workspace: newName } : s
+  );
+  updateState({ sessions });
+  persistSessionWorkspaces(sessions);
+}
+
+// Persist session workspace assignments to localStorage.
+function persistSessionWorkspaces(sessions: Array<{ id: string; workspace?: string }>): void {
+  if (typeof localStorage === 'undefined') return;
+  const wsMap: Record<string, string> = {};
+  for (const s of sessions) {
+    if (s.workspace) wsMap[s.id] = s.workspace;
+  }
+  try {
+    localStorage.setItem('chemycode.sessionWorkspaces', JSON.stringify(wsMap));
+  } catch { /* ignore quota errors */ }
+}
+
+/** Restore session workspace assignments from localStorage on load.
+ *  Priority: backend workdir field > localStorage mapping.
+ *  If backend returns workdir, use it; otherwise fall back to localStorage. */
+export function restoreSessionWorkspaces(): void {
+  if (typeof localStorage === 'undefined') return;
+  let wsMap: Record<string, string> = {};
+  try {
+    const raw = localStorage.getItem('chemycode.sessionWorkspaces');
+    if (raw) wsMap = JSON.parse(raw) as Record<string, string>;
+  } catch { /* ignore parse errors */ }
+
+  const sessions = (state.sessions || []).map((s) => {
+    // Backend workdir takes priority (it's the source of truth).
+    if (s.workdir) {
+      return { ...s, workspace: s.workdir };
+    }
+    // Fall back to localStorage mapping.
+    if (wsMap[s.id]) {
+      return { ...s, workspace: wsMap[s.id] };
+    }
+    return s;
+  });
+  updateState({ sessions });
+}
+
 export async function switchSession(sessionId: string): Promise<void> {
-  if (sessionId === state.activeSessionId) return;
+  // Even if the session is already active, still reload history and switch view.
+  // This fixes the bug where switching away from chat and back left the view
+  // stuck on a non-chat page because the early return skipped currentView update.
+  const isSameSession = sessionId === state.activeSessionId;
   const client = getActiveClient();
   const histR = await client.sessions.history(sessionId);
   if (histR.ok) {
+    // Update the session's workdir in the sessions list from backend data.
+    const sessionInfo = histR.value.session;
+    let sessions = state.sessions || [];
+    if (sessionInfo && sessionInfo.workdir) {
+      sessions = sessions.map((s) =>
+        s.id === sessionId ? { ...s, workdir: sessionInfo.workdir, workspace: sessionInfo.workdir } : s
+      );
+    }
     updateState({
       activeSessionId: sessionId,
       chatMessages: histR.value.messages || [],
       currentView: 'chat',
+      sessions,
+      typingMessageId: null,
+      pendingConfirm: null,
+      turnState: 'idle',
     });
   } else {
-    showError(histR.error.message);
+    // If history fetch failed but it's the same session, at least switch the view.
+    if (isSameSession) {
+      updateState({ currentView: 'chat' });
+    } else {
+      showError(histR.error.message);
+    }
   }
 }
 
 export async function refreshSessions(): Promise<void> {
   const client = getActiveClient();
   const r = await client.sessions.list();
-  if (r.ok) updateState({ sessions: r.value });
+  if (r.ok) {
+    updateState({ sessions: r.value });
+    restoreSessionWorkspaces();
+  }
 }
 
 export async function renameSession(sessionId: string, title: string): Promise<void> {

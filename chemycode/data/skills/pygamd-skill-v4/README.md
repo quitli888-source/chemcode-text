@@ -18,7 +18,8 @@ pygamd/
 ├── README.md                   # 本文件
 ├── scripts/                    # 示例脚本
 │   ├── example_dpd_simulation.py   # DPD模拟示例
-│   └── analyze_trajectory.py       # 轨迹分析示例
+│   ├── analyze_trajectory.py       # 直接读取 XML 轨迹并分析
+│   └── physical_consistency_check.py # 物理一致性检查
 ├── references/                 # 参考文档
 │   └── quick_reference.md         # 快速参考指南
 └── assets/                     # 资源文件
@@ -57,8 +58,7 @@ python scripts/analyze_trajectory.py
 ### 1. AB两嵌段共聚物自组装
 
 ```python
-# 1. GPU 初始化（必须在 import pygamd 之前）
-from pygamd_gpu_init import init_gpu; init_gpu()
+# 1. 导入已安装的 PyGAMD
 import pygamd
 
 # 2. 读取配置
@@ -66,9 +66,9 @@ snap = pygamd.snapshot.read("initial_config.xml")
 
 # 3. 设置 DPD 力场
 dpd = pygamd.force.dpd(info=snap, rcut=1.0)
-dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=4.5)
-dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=4.5)
-dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=4.5)
+dpd.setParams(type_i="A", type_j="A", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="B", type_j="B", alpha=25.0, sigma=3.0)
+dpd.setParams(type_i="A", type_j="B", alpha=30.0, sigma=3.0)
 
 # 4. 积分器 + 输出 + 应用（注意：app.add 不加方括号）
 integrator = pygamd.integration.gwvv(info=snap, group="all")
@@ -93,7 +93,7 @@ app.add(bond)
 
 ```python
 # 设置强排斥相互作用
-dpd.setParams(type_i="A", type_j="B", alpha=40.0, sigma=4.5)  # 强排斥
+dpd.setParams(type_i="A", type_j="B", alpha=40.0, sigma=3.0)  # 强排斥
 ```
 
 ## 分析工具
@@ -103,9 +103,7 @@ dpd.setParams(type_i="A", type_j="B", alpha=40.0, sigma=4.5)  # 强排斥
 >
 > - **OVITO**（`pip install ovito`）：RDF / MSD / Rg / CNA / 配位数
 > - **MDAnalysis**（`pip install MDAnalysis`）：通用轨迹分析
-> - **smart_visualize.py**（本 skill 自带）：OVITO 智能可视化脚本
->
-> 完整可视化与轨迹分析示例见 `scripts/analyze_trajectory.py` 和 `scripts/smart_visualize.py`。
+> `scripts/analyze_trajectory.py` 可直接读取 PyGAMD XML 轨迹并生成 RDF、MSD 与 Rg。
 
 ## 参数调优指南
 

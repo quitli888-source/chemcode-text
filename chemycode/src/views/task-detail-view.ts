@@ -102,6 +102,7 @@ export class TaskDetailView extends LitElement {
     .job-dot.completed { background: var(--color-status-completed); }
     .job-dot.waiting { background: var(--color-status-queued); }
     .job-dot.error { background: var(--color-status-failed); }
+    .job-dot.cancelled { background: var(--color-text-tertiary); }
     .job-spinner {
       width: 10px; height: 10px;
       border: 2px solid var(--color-border-tertiary);
@@ -270,8 +271,8 @@ export class TaskDetailView extends LitElement {
             <div class="info-row"><span class="info-label">计算类型</span><span class="info-value">${CALC_TYPE_LABELS[t.calcType]}</span></div>
             <div class="info-row">
               <span class="info-label">状态</span>
-              <span class="info-value" style="color:${t.status === 'running' ? 'var(--color-status-running)' : t.status === 'error' ? 'var(--color-status-failed)' : t.status === 'waiting' ? 'var(--color-status-queued)' : 'var(--color-status-completed)'}">
-                ${STATUS_LABELS[t.status]}${t.progress !== undefined ? ` · ${t.progress}%` : ''}
+              <span class="info-value" style="color:${t.status === 'running' ? 'var(--color-status-running)' : t.status === 'error' ? 'var(--color-status-failed)' : t.status === 'waiting' ? 'var(--color-status-queued)' : t.status === 'cancelled' ? 'var(--color-text-tertiary)' : 'var(--color-status-completed)'}">
+                ${t.status === 'cancelled' ? '已取消' : STATUS_LABELS[t.status]}${t.progress !== undefined ? ` · ${t.progress}%` : ''}
               </span>
             </div>
             <div class="info-row"><span class="info-label">描述</span><span class="info-value">${t.description || '-'}</span></div>

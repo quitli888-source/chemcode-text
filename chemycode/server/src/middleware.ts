@@ -50,6 +50,7 @@ export function sendErr(res: Response, code: string, message: string, status = 4
   res.status(status).json(err(code, message, status, details));
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function notFound(_req: Request, res: Response) {
   sendErr(res, 'NOT_FOUND', 'Endpoint not found', 404);
 }

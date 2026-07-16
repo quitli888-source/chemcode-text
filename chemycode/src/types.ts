@@ -11,7 +11,7 @@ export type CalcType =
   | 'monte_carlo'
   | 'machine_learning';
 
-export type TaskStatus = 'completed' | 'waiting' | 'error' | 'running';
+export type TaskStatus = 'completed' | 'waiting' | 'error' | 'running' | 'cancelled';
 
 export interface Task {
   id: string;
@@ -30,6 +30,8 @@ export interface Task {
   jobs?: JobStep[];
   parameters?: Record<string, string>;
   outputFiles?: string[];
+  sessionId?: string;
+  messageId?: string;
 }
 
 export interface JobStep {
@@ -43,6 +45,10 @@ export interface ChatMessage {
   type: 'user' | 'agent' | 'system' | 'tool';
   content: string;
   timestamp: string;
+  /** Epoch ms when the message was created (for relative time display). */
+  createdAt?: number;
+  /** Epoch ms when the agent finished streaming (for duration display). */
+  completedAt?: number;
   files?: GeneratedFile[];
   code?: string;
   toolCallId?: string;
@@ -74,6 +80,12 @@ export interface KnowledgeEntry {
   content: string;
   tags: string[];
   updatedAt: string;
+  source?: 'manual' | 'chat' | 'upload';
+  rawContent?: string;
+  createdAt?: string;
+  learned?: boolean;
+  parentPath?: string;
+  importance?: number;
 }
 
 export interface SkillEntry {
@@ -128,7 +140,7 @@ export const CALC_TYPE_LABELS: Record<CalcType, string> = {
   machine_learning: '机器学习',
 };
 
-export const STATUS_LABELS: Record<TaskStatus, string> = {
+export const STATUS_LABELS: Partial<Record<TaskStatus, string>> = {
   completed: '已完成',
   waiting: '等待中',
   error: '出错',

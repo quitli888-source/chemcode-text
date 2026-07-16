@@ -19,6 +19,7 @@ import type {
   ChatMessage,
 } from './types.js';
 import { dataDir } from './storage.js';
+import { migrateFromUserData } from './session-store.js';
 
 interface UserData {
   tasks: Task[];
@@ -27,7 +28,9 @@ interface UserData {
   configuredModels: ConfiguredModel[];
   sessions: Record<string, {
     info: SessionInfo;
-    messages: ChatMessage[];
+    // Messages are now stored in data/sessions/{sessionId}.jsonl
+    // This field is kept for backward-compat migration only (empty after migration).
+    messages?: ChatMessage[];
     plan?: Array<{ step: string; status: string }>;
     planExplanation?: string;
     workdir?: string; // Locked workspace for this session — set on first use.
@@ -121,6 +124,11 @@ class Store {
       loaded = null;
     }
     const d: UserData = loaded ?? this.seedData();
+    // Migrate: if old format has messages inside sessions, move them to JSONL files.
+    if (loaded && d.sessions) {
+      const migrated = migrateFromUserData(userId, d.sessions);
+      if (migrated) this.persist(userId);
+    }
     this.users.set(userId, d);
     if (!loaded) this.persist(userId);
     return d;

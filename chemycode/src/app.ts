@@ -65,6 +65,11 @@ export class ChemycodeApp extends LitElement {
   }
 
   private renderView() {
+    // Only render the active view — switching destroys the old component
+    // and creates the new one. State persistence is handled by the central
+    // store (state.ts) + localStorage, NOT by keeping components alive.
+    // Hidden components would all render simultaneously, causing layout issues
+    // and unnecessary resource consumption.
     switch (this.currentView) {
       case 'chat': return html`<chat-view></chat-view>`;
       case 'task-detail': return html`<task-detail-view></task-detail-view>`;

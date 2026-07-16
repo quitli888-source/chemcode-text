@@ -1,14 +1,17 @@
 // ====== Qdrant 向量数据库连接 ======
-// 通过 SSH 直连阿里云服务器 (1.95.65.154:22)，在服务器上查询 Qdrant REST API。
+// 通过 SSH 隧道连接远程服务器，在服务器上查询 Qdrant REST API。
 // 启动时一次性加载全部 points 到内存，后续检索在本地完成（毫秒级）。
+// SSH 连接参数从环境变量读取（QDRANT_SSH_HOST/PORT/USER/PASSWORD）。
 
 import { Client } from 'ssh2';
 
 // ============ 硬编码的服务器连接 ============
+// NOTE: SSH host/user/password are read from environment variables for security.
+// Do NOT hardcode production credentials in source code.
 const SSH_CONFIG = {
-  host: '1.95.65.154',
-  port: 22,
-  username: 'root',
+  host: process.env.QDRANT_SSH_HOST || '127.0.0.1',
+  port: Number(process.env.QDRANT_SSH_PORT) || 22,
+  username: process.env.QDRANT_SSH_USER || 'root',
   password: process.env.QDRANT_SSH_PASSWORD || '',
   readyTimeout: 10000,
 };
@@ -19,6 +22,7 @@ const COLLECTION = 'chemchat_papers';
 
 // ============ Embedding 配置 ============
 // 默认使用 SiliconFlow（BAAI/bge-m3）
+// API key: 优先从环境变量读取；未设置时使用内置 key（用于向量化检索模型）。
 let _embeddingProvider: string = process.env.EMBEDDING_PROVIDER || 'siliconflow';
 let _embeddingApiKey: string = process.env.EMBEDDING_API_KEY || 'sk-trlxmuodupqmahaknhjokaxaqxxopdbpqtjitbzaollmikll';
 let _embeddingModel: string = process.env.EMBEDDING_MODEL || 'BAAI/bge-m3';

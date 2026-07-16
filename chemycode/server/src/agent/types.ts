@@ -23,7 +23,7 @@ export interface AgentRunConfig {
   /** User ID for audit. */
   userId: string;
   /** Optional: prior conversation messages for context. */
-  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  history?: Array<{ role: 'user' | 'assistant'; content: string; reasoning_content?: string }>;
   /** Optional: file attachment IDs. */
   attachments?: string[];
   /** Confirm manager for dangerous tool approval. */
@@ -36,4 +36,8 @@ export interface AgentRunConfig {
   contextWindow?: number;
   /** Active skill name — its SKILL.md will be injected into the system prompt. */
   activeSkill?: string;
+  /** Whether to search the user's knowledge base for relevant context. */
+  useKnowledge?: boolean;
+  /** User's knowledge context (pre-retrieved relevant entries). */
+  knowledgeContext?: string;
 }

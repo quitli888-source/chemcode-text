@@ -43,6 +43,12 @@ export interface ApiClientShape {
     list(): Promise<Result<any, ApiError>>;
     search(query: string): Promise<Result<any, ApiError>>;
     get(id: string): Promise<Result<any, ApiError>>;
+    create(req: any): Promise<Result<any, ApiError>>;
+    learn(req: any): Promise<Result<any, ApiError>>;
+    learnFile(file: File, title?: string): Promise<Result<any, ApiError>>;
+    learnChat(req: any): Promise<Result<any, ApiError>>;
+    update(id: string, patch: any): Promise<Result<any, ApiError>>;
+    remove(id: string): Promise<Result<any, ApiError>>;
   };
   models: {
     list(): Promise<Result<any, ApiError>>;

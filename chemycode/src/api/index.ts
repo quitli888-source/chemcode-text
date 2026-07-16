@@ -152,16 +152,58 @@ export const skills = {
 // ---------- Knowledge ----------
 
 export const knowledge = {
-  async list() {
-    return api.get<KnowledgeEntry[]>('/knowledge');
+  async list(opts: { offset?: number; limit?: number; parentPath?: string; importance?: number } = {}) {
+    return api.get<{ records: KnowledgeEntry[]; total: number; tree: Array<{ path: string; count: number; children: string[] }> }>('/knowledge', {
+      query: {
+        offset: opts.offset,
+        limit: opts.limit,
+        parentPath: opts.parentPath,
+        importance: opts.importance,
+      },
+    });
   },
 
-  async search(query: string) {
-    return api.get<KnowledgeEntry[]>('/knowledge/search', { query: { q: query } });
+  async tree() {
+    return api.get<Array<{ path: string; count: number; children: string[] }>>('/knowledge/tree');
+  },
+
+  async search(query: string, opts: { parentPath?: string; importance?: number } = {}) {
+    return api.get<KnowledgeEntry[]>('/knowledge/search', {
+      query: { q: query, parentPath: opts.parentPath, importance: opts.importance },
+    });
   },
 
   async get(id: string) {
     return api.get<KnowledgeEntry>(`/knowledge/${encodeURIComponent(id)}`);
+  },
+
+  async create(req: { title: string; category?: string; content: string; tags?: string[]; parentPath?: string; importance?: number }) {
+    return api.post<KnowledgeEntry>('/knowledge', req);
+  },
+
+  async learn(req: { content: string; source?: 'upload' | 'chat'; title?: string; parentPath?: string; importance?: number }) {
+    return api.post<{ record: KnowledgeEntry; learned: boolean; message: string }>('/knowledge/learn', req);
+  },
+
+  async learnFile(file: File, opts: { title?: string; parentPath?: string; importance?: number } = {}) {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (opts.title) formData.append('title', opts.title);
+    if (opts.parentPath) formData.append('parentPath', opts.parentPath);
+    if (opts.importance !== undefined) formData.append('importance', String(opts.importance));
+    return api.upload<{ record: KnowledgeEntry; learned: boolean; message: string }>('/knowledge/learn-file', formData);
+  },
+
+  async learnChat(req: { sessionId: string; messages: Array<{ role: string; content: string }>; parentPath?: string; importance?: number }) {
+    return api.post<{ record: KnowledgeEntry | null; learned: boolean; message: string }>('/knowledge/learn-chat', req);
+  },
+
+  async update(id: string, patch: Partial<{ title: string; category: string; content: string; tags: string[]; parentPath: string; importance: number }>) {
+    return api.put<KnowledgeEntry>(`/knowledge/${encodeURIComponent(id)}`, patch);
+  },
+
+  async remove(id: string) {
+    return api.delete<{ deleted: boolean }>(`/knowledge/${encodeURIComponent(id)}`);
   },
 };
 

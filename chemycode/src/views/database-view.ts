@@ -543,12 +543,12 @@ export class DatabaseView extends LitElement {
               <button class="settings-save" style="background: var(--color-text-secondary);" @click=${() => this.reconnect()}>🔄 测试连接</button>
             </div>
             <div class="info-box" style="margin-top: 8px;">
-              💡 数据库通过 SSH 直连阿里云服务器（1.95.65.154:22 → Qdrant 127.0.0.1:6333）。<br>
+              💡 数据库通过 SSH 隧道连接远程服务器，在服务端查询 Qdrant 向量数据库。<br>
               默认使用 SiliconFlow（BAAI/bge-m3）语义检索。API Key 已在后端配置。
             </div>
           ` : html`
             <div style="font-size: var(--font-size-xs); color: var(--color-text-tertiary);">
-              服务器: SSH → 1.95.65.154 ·
+              连接: SSH 远程 ·
               模式: ${this.embedProvider === 'none' ? '关键词检索' : '语义检索'} —
               <button class="settings-toggle" @click=${() => this.showSettings = true}>修改</button>
             </div>

@@ -54,7 +54,6 @@ export class ConnectionStatus extends LitElement {
     });
     const s = getState();
     this.language = s.language;
-    getState().language;
   }
 
   private label(): string {

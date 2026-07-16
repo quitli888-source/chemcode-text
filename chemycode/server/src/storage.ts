@@ -13,6 +13,8 @@ export async function ensureDataDirs(): Promise<void> {
     dataDir(),
     path.join(dataDir(), 'users'),
     path.join(dataDir(), 'uploads'),
+    path.join(dataDir(), 'sessions'),  // Chat message JSONL files
+    path.join(dataDir(), 'knowledge'),  // User knowledge base JSONL files
   ];
   for (const d of dirs) {
     try { fs.mkdirSync(d, { recursive: true }); } catch {}

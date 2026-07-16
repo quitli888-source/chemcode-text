@@ -130,6 +130,7 @@ function newSession(req: CreateSessionRequest): SessionInfo {
         type: 'system',
         content: '欢迎使用 Chemycode！我可以帮你完成计算化学任务，随时开始对话。',
         timestamp: timeLabel(now()),
+        createdAt: Date.now(),
       },
     ],
   });
@@ -321,6 +322,7 @@ const mockSessions = {
         type: 'user',
         content: body.content,
         timestamp: timeLabel(now()),
+        createdAt: Date.now(),
       });
     }
     return ok(undefined as unknown as void);
@@ -363,7 +365,7 @@ const mockTasks = {
   },
   async cancel(id: string): Promise<Result<void, ApiError>> {
     const t = _mockTasks.find((x) => x.id === id);
-    if (t) t.status = 'completed';
+    if (t) t.status = 'cancelled';
     return ok(undefined as unknown as void);
   },
   async delete(id: string): Promise<Result<void, ApiError>> {
@@ -420,27 +422,140 @@ const mockSkills = {
   },
 };
 
+function buildMockTree(entries: KnowledgeEntry[]): Array<{ path: string; count: number; children: string[] }> {
+  const pathMap = new Map<string, number>();
+  for (const r of entries) {
+    const pp = r.parentPath || '';
+    pathMap.set(pp, (pathMap.get(pp) || 0) + 1);
+  }
+  const result: Array<{ path: string; count: number; children: string[] }> = [];
+  for (const [p, count] of pathMap) {
+    result.push({ path: p, count, children: [] });
+  }
+  return result.sort((a, b) => a.path.localeCompare(b.path));
+}
+
 const mockKnowledge = {
-  async list(): Promise<Result<KnowledgeEntry[], ApiError>> {
+  async list(opts: { offset?: number; limit?: number; parentPath?: string; importance?: number } = {}): Promise<Result<{ records: KnowledgeEntry[]; total: number; tree: Array<{ path: string; count: number; children: string[] }> }, ApiError>> {
     await simulateLatency();
-    return ok(_mockKnowledge.slice());
+    let filtered = _mockKnowledge.slice();
+    if (opts.parentPath) {
+      const pp = opts.parentPath.toLowerCase();
+      filtered = filtered.filter((r) => (r.parentPath || '').toLowerCase().startsWith(pp));
+    }
+    if (opts.importance !== undefined) {
+      filtered = filtered.filter((r) => (r.importance || 0) >= opts.importance!);
+    }
+    const tree = buildMockTree(_mockKnowledge);
+    const total = filtered.length;
+    const records = opts.limit && opts.limit > 0 ? filtered.slice(opts.offset || 0, (opts.offset || 0) + opts.limit) : filtered;
+    return ok({ records, total, tree });
   },
-  async search(query: string): Promise<Result<KnowledgeEntry[], ApiError>> {
+  async tree(): Promise<Result<Array<{ path: string; count: number; children: string[] }>, ApiError>> {
+    await simulateLatency();
+    return ok(buildMockTree(_mockKnowledge));
+  },
+  async search(query: string, opts: { parentPath?: string; importance?: number } = {}): Promise<Result<KnowledgeEntry[], ApiError>> {
     await simulateLatency();
     const q = query.toLowerCase();
-    return ok(
-      _mockKnowledge.filter(
-        (e) => e.title.toLowerCase().includes(q) ||
-               e.content.toLowerCase().includes(q) ||
-               e.tags.some((t) => t.toLowerCase().includes(q)),
-      ),
+    let filtered = _mockKnowledge.filter(
+      (e) => e.title.toLowerCase().includes(q) ||
+             e.content.toLowerCase().includes(q) ||
+             e.tags.some((t) => t.toLowerCase().includes(q)),
     );
+    if (opts.parentPath) {
+      const pp = opts.parentPath.toLowerCase();
+      filtered = filtered.filter((r) => (r.parentPath || '').toLowerCase().startsWith(pp));
+    }
+    if (opts.importance !== undefined) {
+      filtered = filtered.filter((r) => (r.importance || 0) >= opts.importance!);
+    }
+    return ok(filtered);
   },
   async get(id: string): Promise<Result<KnowledgeEntry, ApiError>> {
     await simulateLatency();
     const e = _mockKnowledge.find((x) => x.id === id);
     if (!e) return err(makeError('NOT_FOUND', 'Knowledge entry not found', 404));
     return ok(e);
+  },
+  async create(req: any): Promise<Result<KnowledgeEntry, ApiError>> {
+    await simulateLatency();
+    const entry: KnowledgeEntry = {
+      id: `kw-${Date.now()}`,
+      title: req.title,
+      category: req.category || 'General',
+      content: req.content,
+      tags: req.tags || [],
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: 'manual',
+      learned: true,
+    };
+    _mockKnowledge.unshift(entry);
+    return ok(entry);
+  },
+  async learn(req: any): Promise<Result<any, ApiError>> {
+    await simulateLatency();
+    const entry: KnowledgeEntry = {
+      id: `kw-${Date.now()}`,
+      title: req.title || req.content.slice(0, 50),
+      category: 'General',
+      content: req.content,
+      tags: ['mock'],
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: req.source || 'upload',
+      learned: true,
+    };
+    _mockKnowledge.unshift(entry);
+    return ok({ record: entry, learned: true, message: 'Mock: saved without LLM processing.' });
+  },
+  async learnFile(file: File, title?: string): Promise<Result<any, ApiError>> {
+    await simulateLatency();
+    const text = await file.text();
+    const entry: KnowledgeEntry = {
+      id: `kw-${Date.now()}`,
+      title: title || file.name,
+      category: 'General',
+      content: text.slice(0, 5000),
+      tags: ['mock', 'file'],
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: 'upload',
+      learned: true,
+    };
+    _mockKnowledge.unshift(entry);
+    return ok({ record: entry, learned: true, message: `Mock: learned from ${file.name}.` });
+  },
+  async learnChat(req: any): Promise<Result<any, ApiError>> {
+    await simulateLatency();
+    const entry: KnowledgeEntry = {
+      id: `kw-${Date.now()}`,
+      title: `Chat ${new Date().toLocaleDateString()}`,
+      category: 'Chat',
+      content: req.messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n'),
+      tags: ['chat'],
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: 'chat',
+      learned: true,
+    };
+    _mockKnowledge.unshift(entry);
+    return ok({ record: entry, learned: true, message: 'Mock: chat saved to knowledge base.' });
+  },
+  async update(id: string, patch: any): Promise<Result<KnowledgeEntry, ApiError>> {
+    await simulateLatency();
+    const e = _mockKnowledge.find((x) => x.id === id);
+    if (!e) return err(makeError('NOT_FOUND', 'Knowledge entry not found', 404));
+    Object.assign(e, patch, { updatedAt: new Date().toISOString() });
+    return ok(e);
+  },
+  async remove(id: string): Promise<Result<{ deleted: boolean }, ApiError>> {
+    await simulateLatency();
+    const idx = _mockKnowledge.findIndex((x) => x.id === id);
+    if (idx < 0) return err(makeError('NOT_FOUND', 'Knowledge entry not found', 404));
+    _mockKnowledge.splice(idx, 1);
+    return ok({ deleted: true });
   },
 };
 

@@ -7,6 +7,7 @@ import { getState, subscribe, toggleSkill, updateState } from '../state';
 import type { SkillEntry } from '../types';
 import { getActiveClient } from '../api/mock';
 import { showError, showSuccess } from '../components/toast';
+import { showConfirm } from '../components/confirm-dialog';
 
 @customElement('chemycode-skills-view')
 export class SkillsView extends LitElement {
@@ -295,7 +296,14 @@ export class SkillsView extends LitElement {
   }
 
   private async onDelete(s: SkillEntry) {
-    if (!confirm(`确定删除技能「${s.name}」？此操作不可撤销。`)) return;
+    const ok = await showConfirm({
+      title: '删除技能',
+      message: `确定删除技能「${s.name}」？此操作不可撤销。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      destructive: true,
+    });
+    if (!ok) return;
     this.pendingId = s.id;
     try {
       const client = getActiveClient();

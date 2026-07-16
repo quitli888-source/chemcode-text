@@ -9,7 +9,6 @@ import {
   subscribe,
   setSettingsTab,
   setThemeMode,
-  setLanguage,
   setFontSize,
   addModel,
   removeModel,
@@ -223,7 +222,7 @@ export class SettingsView extends LitElement {
       const s = getState();
       this.activeTab = s.settingsTab;
       this.theme = s.theme;
-      this.language = s.language;
+      this.language = s.language || 'zh';
       this.fontSize = s.fontSize;
       this.models = s.configuredModels;
     });
@@ -348,7 +347,6 @@ export class SettingsView extends LitElement {
       preview: { zh: '当前预览', en: 'Preview' },
       previewText: { zh: '当前设置已实时应用到界面。你可以直接切换主题、字号和语言，查看效果。', en: 'Your current preferences are applied instantly. Switch theme, font size, and language to preview the experience.' },
       zh: { zh: '中文', en: 'Chinese' },
-      en: { zh: 'English', en: 'English' },
       modelHint: { zh: '提示：支持 OpenAI 兼容协议', en: 'Tip: Supports the OpenAI-compatible protocol' },
       noModels: { zh: '尚未配置任何模型', en: 'No models configured yet' },
       addModel: { zh: '+ 配置新模型', en: '+ Add model' },
@@ -402,10 +400,7 @@ export class SettingsView extends LitElement {
             <div class="setting-row">
               <span class="setting-label">${this.t('language')}</span>
               <div class="setting-control">
-                <select .value=${this.language} @change=${(e: Event) => setLanguage((e.target as HTMLSelectElement).value as Lang)}>
-                  <option value="zh">${this.t('zh')}</option>
-                  <option value="en">${this.t('en')}</option>
-                </select>
+                <span style="font-size:var(--font-size-sm);color:var(--color-text-secondary)">中文</span>
               </div>
             </div>
             <div class="setting-row">

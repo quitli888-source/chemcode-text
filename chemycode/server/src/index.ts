@@ -20,6 +20,7 @@
 // LLM that produces the same streaming protocol the frontend expects. This
 // keeps the dev loop fast — no OpenClaw runtime required.
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import http from 'node:http';
@@ -61,7 +62,20 @@ if (skillToolCount > 0) {
 }
 
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
+// CORS: restrict to allowed origins from environment variable.
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174,http://localhost:8787')
+  .split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow same-origin / no-origin (curl, server-side) requests.
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // Health probe (no auth)
@@ -87,7 +101,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 attachWebSocket(wss);
 
 // ---- Qdrant 数据库自动连接 ----
-// SSH 硬编码在 db/qdrant.ts 中（1.95.65.154:22），启动时自动测试连接
+// SSH 连接参数在 db/qdrant.ts 中从环境变量读取，启动时自动测试连接
 
 server.listen(PORT, HOST, async () => {
   console.log(`[chemycode-gateway] listening on http://${HOST}:${PORT}`);

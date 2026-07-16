@@ -12,9 +12,13 @@ build/
 
 # User data (contains chat history, API keys, personal info)
 data/users/
+data/sessions/
+data/knowledge/
 data/apikeys.json
 data/uploads/
 data/usage.jsonl
+data/audit.log
+data/errors.log
 
 # Python cache
 __pycache__/

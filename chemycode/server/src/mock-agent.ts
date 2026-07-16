@@ -5,6 +5,7 @@
 
 import { sendToClient, type Client } from './ws.js';
 import { store } from './store.js';
+import { appendMessage, getMessageCount } from './session-store.js';
 import type { ChatMessage, StreamEvent } from './types.js';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -15,27 +16,30 @@ export function runMockAgent(
   prompt: string,
   _model?: string,
   _attachments?: string[],
-): () => void {
+  requestedMessageId?: string,
+): { cancel: () => void; done: Promise<void> } {
   let cancelled = false;
-  const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const messageId = requestedMessageId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const T = 'chat' as const;
 
-  // Persist user message.
+  // Persist user message to session JSONL.
   const userData = store.data(client.userId);
   const session = userData.sessions[sessionId];
   if (session) {
-    session.messages.push({
+    appendMessage(sessionId, {
       id: `msg-${Date.now()}-u`,
       type: 'user',
       content: prompt,
       timestamp: timeLabel(new Date()),
+      createdAt: Date.now(),
     });
     session.info.lastInteractionAt = new Date().toISOString();
-    session.info.messageCount = session.messages.length;
+    session.info.messageCount = getMessageCount(sessionId);
     store.commit(client.userId);
   }
 
-  (async () => {
+  const done = (async () => {
+    let streamedText = '';
     try {
       // 1. thinking
       sendToClient(client, {
@@ -44,17 +48,25 @@ export function runMockAgent(
         topic: T,
       } satisfies StreamEvent);
       await sleep(300);
-      if (cancelled) return;
+      if (cancelled) {
+        sendCancelled(client, messageId, T);
+        return;
+      }
 
       // 2. text: inform user no model is configured
       const text = `⚠️ 当前未配置 LLM 模型，无法执行 AI 对话。\n\n请前往 **设置 → 模型管理** 添加模型（支持 OpenAI / DeepSeek / Anthropic 等兼容 API）。\n\n配置后即可使用完整的 AI Agent 功能，包括工具调用、文件读写、代码执行等。`;
 
       const chars = Array.from(text);
       for (let i = 0; i < chars.length; i += 3) {
-        if (cancelled) return;
+        if (cancelled) {
+          sendCancelled(client, messageId, T);
+          break;
+        }
+        const delta = chars.slice(i, i + 3).join('');
+        streamedText += delta;
         sendToClient(client, {
           type: 'text_delta', messageId,
-          delta: chars.slice(i, i + 3).join(''),
+          delta,
           index: i,
           topic: T,
         } satisfies StreamEvent);
@@ -62,21 +74,27 @@ export function runMockAgent(
       }
 
       // 3. done
-      sendToClient(client, {
-        type: 'done', messageId,
-        finishReason: 'stop',
-        topic: T,
-        generatedFiles: [],
-      } satisfies StreamEvent);
+      if (!cancelled) {
+        sendToClient(client, {
+          type: 'done', messageId,
+          finishReason: 'stop',
+          topic: T,
+          generatedFiles: [],
+        } satisfies StreamEvent);
+      }
 
-      // 4. persist
+      // 4. persist agent message to session JSONL
       if (session) {
-        session.messages.push({
-          id: messageId, type: 'agent', content: text,
+        appendMessage(sessionId, {
+          id: messageId,
+          type: 'agent',
+          content: cancelled ? (streamedText || '任务已取消。') : text,
           timestamp: timeLabel(new Date()),
+          createdAt: Date.now(),
+          completedAt: Date.now(),
         });
         session.info.lastInteractionAt = new Date().toISOString();
-        session.info.messageCount = session.messages.length;
+        session.info.messageCount = getMessageCount(sessionId);
         store.commit(client.userId);
       }
     } catch (e) {
@@ -88,7 +106,20 @@ export function runMockAgent(
     }
   })();
 
-  return () => { cancelled = true; };
+  return {
+    cancel: () => { cancelled = true; },
+    done,
+  };
+}
+
+function sendCancelled(client: Client, messageId: string, topic: 'chat'): void {
+  sendToClient(client, {
+    type: 'done',
+    messageId,
+    finishReason: 'cancelled',
+    topic,
+    generatedFiles: [],
+  } satisfies StreamEvent);
 }
 
 function timeLabel(d: Date): string {
