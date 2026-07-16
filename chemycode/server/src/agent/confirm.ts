@@ -40,6 +40,10 @@ export interface ConfirmRequest {
   options: { id: string; label: string; destructive?: boolean }[];
   /** The tool name being confirmed (for whitelist lookup). */
   toolName?: string;
+  /** Whether the UI may offer a per-tool "always allow" action. */
+  allowAlways: boolean;
+  /** Required workflow gates ignore full-access and allowlists. */
+  required: boolean;
 }
 
 interface PendingEntry {
@@ -52,11 +56,15 @@ export class ConfirmManager {
   /** P0 FIX: Timeout handles for each pending confirmation. */
   private timeouts = new Map<string, ReturnType<typeof setTimeout>>();
   /** 5 minutes - generous enough for user to read and decide. */
-  private static TIMEOUT_MS = 5 * 60 * 1000;
+  private readonly timeoutMs: number;
   /** Tools the user has granted "always allow" for this session. */
   private allowedTools = new Set<string>();
   /** Full access mode: skip ALL confirmations for this session. */
   private fullAccess = false;
+
+  constructor(options?: { timeoutMs?: number }) {
+    this.timeoutMs = options?.timeoutMs ?? 5 * 60 * 1000;
+  }
 
   /** Check if a tool is auto-approved (either full access or whitelisted). */
   isAutoApproved(toolName: string): boolean {
@@ -89,6 +97,11 @@ export class ConfirmManager {
     return this.pending.get(confirmId)?.request.toolName;
   }
 
+  /** Whether a pending confirmation may be converted into an allowlist rule. */
+  getPendingAllowAlways(confirmId: string): boolean {
+    return this.pending.get(confirmId)?.request.allowAlways ?? false;
+  }
+
   /**
    * Request confirmation from the user.
    * Returns a Promise that resolves to `true` if accepted, `false` if rejected
@@ -103,14 +116,17 @@ export class ConfirmManager {
     emitEvent: (ev: StreamEvent) => void,
     messageId: string,
     toolName?: string,
+    optionsConfig?: { required?: boolean; allowAlways?: boolean },
   ): Promise<boolean> {
+    const required = optionsConfig?.required === true;
+    const allowAlways = optionsConfig?.allowAlways !== false && !required;
     // Auto-approve if tool is whitelisted or full access is on.
-    if (toolName && this.isAutoApproved(toolName)) {
+    if (!required && toolName && this.isAutoApproved(toolName)) {
       console.log(`[confirm] auto-approved tool "${toolName}" (whitelisted or full access)`);
       return true;
     }
 
-    const request: ConfirmRequest = { messageId, prompt, options, toolName };
+    const request: ConfirmRequest = { messageId, prompt, options, toolName, allowAlways, required };
 
     return new Promise<boolean>((resolve) => {
       // P0 FIX: Set a timeout so the agent doesn't hang forever if the
@@ -120,9 +136,14 @@ export class ConfirmManager {
           console.warn(`[confirm] timed out for messageId=${messageId}, auto-rejecting`);
           this.pending.delete(messageId);
           this.timeouts.delete(messageId);
+          emitEvent({
+            type: 'confirm_timeout',
+            messageId,
+            topic: 'chat',
+          } as StreamEvent);
           resolve(false);
         }
-      }, ConfirmManager.TIMEOUT_MS);
+      }, this.timeoutMs);
       this.timeouts.set(messageId, timer);
 
       this.pending.set(messageId, { resolve, request });
@@ -134,6 +155,8 @@ export class ConfirmManager {
         prompt,
         options,
         toolName,
+        allowAlways,
+        required,
         topic: 'chat',
       } as StreamEvent);
     });

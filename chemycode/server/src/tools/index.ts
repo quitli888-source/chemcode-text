@@ -13,5 +13,6 @@ import './update-plan.js';
 import './sessions-spawn.js';
 import './database-search.js';
 import './run-skill-script.js';
+import './human-checkpoint.js';
 import './save-note.js';
 import './create-task.js';

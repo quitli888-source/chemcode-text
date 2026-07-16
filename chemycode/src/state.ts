@@ -55,7 +55,14 @@ export interface AppState {
   // Session / chat
   activeSessionId: string | null;
   sessions: Array<{ id: string; title: string; lastInteractionAt: string; messageCount: number; model?: string; workspace?: string; workdir?: string }>;
-  pendingConfirm: { prompt: string; options: { id: string; label: string; destructive?: boolean }[]; messageId: string; toolName?: string } | null;
+  pendingConfirm: {
+    prompt: string;
+    options: { id: string; label: string; destructive?: boolean }[];
+    messageId: string;
+    toolName?: string;
+    allowAlways?: boolean;
+    required?: boolean;
+  } | null;
 
   // Access control
   fullAccessMode: boolean;       // skip ALL confirmations
@@ -673,7 +680,26 @@ function handleStreamEvent(
     }
     case 'confirm_request':
       updateState({
-        pendingConfirm: { prompt: ev.prompt, options: ev.options, messageId: agentMsgId, toolName: ev.toolName },
+        pendingConfirm: {
+          prompt: ev.prompt,
+          options: ev.options,
+          messageId: agentMsgId,
+          toolName: ev.toolName,
+          allowAlways: ev.allowAlways,
+          required: ev.required,
+        },
+      });
+      break;
+    case 'confirm_timeout':
+      if (state.pendingConfirm?.messageId === ev.messageId) {
+        updateState({ pendingConfirm: null });
+      }
+      addChatMessage({
+        id: `confirm-timeout-${Date.now()}`,
+        type: 'system',
+        content: '人工确认已超时，本次操作已自动拒绝。',
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        createdAt: Date.now(),
       });
       break;
     case 'error': {
@@ -886,6 +912,7 @@ export async function sendMessage(content: string, opts: { model?: string; attac
 export function respondToConfirm(optionId: string, allowTool?: boolean): void {
   const confirm = state.pendingConfirm;
   if (!confirm) return;
+  const canAllowTool = allowTool === true && confirm.allowAlways === true && confirm.required !== true;
 
   // Add a user message showing the choice.
   const ts = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
@@ -893,7 +920,7 @@ export function respondToConfirm(optionId: string, allowTool?: boolean): void {
     id: `msg-${Date.now()}`,
     type: 'user',
     content: optionId === 'accept'
-      ? (allowTool && confirm.toolName ? `始终允许「${confirm.toolName}」，继续执行` : '确认，继续执行')
+      ? (canAllowTool && confirm.toolName ? `始终允许「${confirm.toolName}」，继续执行` : '确认，继续执行')
       : '已拒绝',
     timestamp: ts,
     createdAt: Date.now(),
@@ -901,7 +928,7 @@ export function respondToConfirm(optionId: string, allowTool?: boolean): void {
   updateState({ pendingConfirm: null });
 
   // Track locally: add tool to allowed list.
-  if (allowTool && confirm.toolName && optionId === 'accept') {
+  if (canAllowTool && confirm.toolName && optionId === 'accept') {
     if (!state.allowedTools.includes(confirm.toolName)) {
       updateState({ allowedTools: [...state.allowedTools, confirm.toolName] });
     }
@@ -951,7 +978,7 @@ export function respondToConfirm(optionId: string, allowTool?: boolean): void {
     type: 'confirm_response',
     confirmId: confirm.messageId,
     optionId,
-    allowTool,
+    allowTool: canAllowTool,
   });
 }
 

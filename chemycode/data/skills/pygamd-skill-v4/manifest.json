@@ -1,12 +1,13 @@
 {
   "name": "pygamd-skill-v4",
   "description": "PyGAMD DPD 介观模拟技能 — AB两嵌段共聚物相分离、自组装结构预测、轨迹分析、物理一致性检验。使用 run_skill_script 工具执行脚本。",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Local",
   "scripts": [
     {
       "name": "example_dpd_simulation.py",
-      "description": "完整的 AB 两嵌段共聚物 DPD 模拟工作流：生成 XML 配置 → GPU 加速 DPD 演化 → 输出轨迹。参数：nchains, nbeads, fA, rho, steps, a_AB"
+      "workflow": "Run --phase prepare, equilibration, and production separately with mandatory human checkpoints between phases.",
+      "description": "分阶段 AB 两嵌段共聚物 DPD 工作流；prepare、equilibration、production 必须分开运行，并在阶段之间完成人工确认。"
     },
     {
       "name": "analyze_trajectory.py",

@@ -170,7 +170,7 @@ function buildSystemPrompt(workdir: string, toolNames: string[], activeSkill?: s
   const toolList = toolNames.map((t) => `- ${t}`).join('\n');
 
   // Check if there are non-builtin tools (skills).
-  const builtinTools = ['file_read', 'file_write', 'bash_exec', 'update_plan', 'sessions_spawn', 'database_search', 'database_status', 'run_skill_script', 'save_note', 'create_task', 'update_task'];
+  const builtinTools = ['file_read', 'file_write', 'bash_exec', 'update_plan', 'sessions_spawn', 'database_search', 'database_status', 'run_skill_script', 'human_checkpoint', 'save_note', 'create_task', 'update_task'];
   const skillTools = toolNames.filter((t) => !builtinTools.some((b) => t.startsWith(b + ':')));
   const skillSection = skillTools.length > 0
     ? `\n## Skill Tools (IMPORTANT)\nThe following tools were loaded from installed skills. YOU MUST actively use them when the user\'s request matches their capability:\n${skillTools.map((t) => `- ${t}`).join('\n')}\nWhen the user asks for something that a skill tool can handle, USE that tool immediately. Do NOT ask the user to confirm — just use it.\n`
@@ -219,6 +219,7 @@ When you need to use a tool:
 5. For bash_exec: use it to run scripts, install packages, and verify results
 6. You can call MULTIPLE tools in one response if they are independent
 7. Always wait for tool results before proceeding to the next step
+8. When an active skill declares a mandatory human checkpoint, call human_checkpoint with concrete evidence before taking the next action. Never replace it with a plain-text question.
 
 ## Response Quality Rules
 - ALWAYS provide complete, detailed responses. Never cut off mid-sentence or mid-explanation.
@@ -405,6 +406,17 @@ export async function runAgentLoop(
   // file_write. We track the overall pattern instead.
   let recentToolFailures = 0;  // Count of failures in the last N tool calls.
   let totalToolCalls = 0;      // Total tool calls in this run.
+  const pygamdCheckpointOrder = [
+    'pygamd-H1-environment',
+    'pygamd-H2-system',
+    'pygamd-H3-preflight',
+    'pygamd-H4-equilibration',
+    'pygamd-H5-production',
+  ];
+  const isPygamdWorkflow = config.activeSkill === 'pygamd-skill-v4' || config.activeSkill === 'pygamd';
+  let pygamdCheckpointIndex = 0;
+  let pygamdEvidenceUpdated = false;
+  let pygamdPhysicalCheckPassed = false;
   // Track files generated during this agent run.
   const generatedFiles: Array<{ name: string; path: string; type: string }> = [];
   // Accumulate content across auto-continue iterations (for persistence).
@@ -820,6 +832,54 @@ export async function runAgentLoop(
 
       // Check if tool is dangerous and requires confirmation.
       const tool = toolRegistry.get(toolName);
+      if (isPygamdWorkflow && toolName === 'human_checkpoint') {
+        const suppliedId = String(toolParams.checkpointId || '');
+        const expectedId = pygamdCheckpointOrder[pygamdCheckpointIndex];
+        const missingEvidence = !pygamdEvidenceUpdated;
+        const missingPreflight = suppliedId === 'pygamd-H3-preflight' && !pygamdPhysicalCheckPassed;
+        if (suppliedId !== expectedId || missingEvidence || missingPreflight) {
+          const sequenceError = suppliedId !== expectedId
+            ? (expectedId
+            ? `Invalid PyGAMD checkpoint order. Expected "${expectedId}", received "${suppliedId || '(empty)'}".`
+            : `All mandatory PyGAMD checkpoints have already been completed; unexpected checkpoint "${suppliedId}".`)
+            : missingPreflight
+              ? 'PyGAMD H3 requires a successful physical_consistency_check.py result with zero failed checks.'
+              : `PyGAMD checkpoint "${suppliedId}" requires new successful tool evidence after the previous checkpoint.`;
+          sendEvent({
+            type: 'tool_call_end',
+            toolCallId: toolCall.id,
+            result: sequenceError,
+            error: sequenceError,
+            topic: 'chat',
+          } as StreamEvent);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            name: toolName,
+            content: `[ERROR] ${sequenceError}`,
+            reasoning_content: '',
+          });
+          continue;
+        }
+      }
+      if (tool?.definition.confirmationMode === 'required' && !confirmManager) {
+        const confirmationError = `Required human confirmation is unavailable for tool "${toolName}". The workflow cannot continue.`;
+        sendEvent({
+          type: 'tool_call_end',
+          toolCallId: toolCall.id,
+          result: confirmationError,
+          error: confirmationError,
+          topic: 'chat',
+        } as StreamEvent);
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: toolName,
+          content: `[ERROR] ${confirmationError}`,
+          reasoning_content: '',
+        });
+        continue;
+      }
       if (tool?.definition.dangerous && confirmManager) {
         // Emit turn_state: awaiting_confirm before blocking.
         sendEvent({
@@ -841,6 +901,10 @@ export async function runAgentLoop(
           sendEvent,
           messageId,
           toolName,
+          {
+            required: tool.definition.confirmationMode === 'required',
+            allowAlways: tool.definition.confirmationMode !== 'required',
+          },
         );
 
         if (!accepted) {
@@ -879,6 +943,20 @@ export async function runAgentLoop(
         { workdir, userId, sessionId, messageId, signal, sendEvent },
         toolPermissions,
       );
+      if (isPygamdWorkflow && toolName === 'human_checkpoint' && toolResult.success) {
+        pygamdCheckpointIndex++;
+        pygamdEvidenceUpdated = false;
+      } else if (isPygamdWorkflow && toolResult.success) {
+        pygamdEvidenceUpdated = true;
+        if (
+          toolName === 'run_skill_script'
+          && String(toolParams.script || '') === 'physical_consistency_check.py'
+          && !/\bfailed\b\s*[:=]\s*[1-9]/i.test(toolResult.content)
+          && !/失败:\s*\*\*[1-9]/.test(toolResult.content)
+        ) {
+          pygamdPhysicalCheckPassed = true;
+        }
+      }
 
       sendEvent({
         type: 'tool_call_end',
@@ -1084,6 +1162,26 @@ function buildConfirmPrompt(toolName: string, params: Record<string, unknown>): 
     // Truncate long commands but show enough to understand the action.
     const shortCmd = cmd.length > 200 ? cmd.slice(0, 200) + '...' : cmd;
     return `⚠️ 即将执行 Shell 命令\n\n命令: ${shortCmd}\n\n该操作将直接在你的机器上执行，请确认是否继续。`;
+  }
+  if (toolName === 'human_checkpoint') {
+    const title = String(params.title || params.checkpointId || 'Workflow checkpoint');
+    const checkpointId = String(params.checkpointId || '');
+    const evidence = String(params.evidence || '');
+    const nextAction = String(params.nextAction || '');
+    const warnings = String(params.warnings || '').trim();
+    return [
+      `Mandatory human checkpoint: ${title}`,
+      checkpointId ? `Checkpoint: ${checkpointId}` : '',
+      '',
+      'Verified evidence:',
+      evidence || '(No evidence supplied)',
+      '',
+      warnings ? `Warnings:\n${warnings}\n` : '',
+      'If approved, the agent will:',
+      nextAction || '(No next action supplied)',
+      '',
+      'This workflow gate requires an explicit decision and cannot be bypassed by Full Access.',
+    ].filter(Boolean).join('\n');
   }
   if (toolName === 'run_skill_script') {
     return `⚠️ 即将运行 Skill 脚本\n\nSkill: ${skillName}\n脚本: ${scriptName}\n\n该操作将执行外部脚本，请确认是否继续。`;

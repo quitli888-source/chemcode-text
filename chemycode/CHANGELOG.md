@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0 - 2026-07-16
+
+### Added
+
+- Added a mandatory `human_checkpoint` tool for scientific workflows.
+- Defined five ordered PyGAMD approval gates covering environment, system setup, preflight checks, equilibration, and production results.
+- Added regression tests for required confirmations, allowlist behavior, and confirmation timeouts.
+
+### Changed
+
+- Made required workflow confirmations immune to Full Access and per-tool allowlists.
+- Added explicit timeout feedback and mandatory-checkpoint labeling in the chat UI.
+- Split the PyGAMD demo into separate prepare, equilibration, and production phases.
+- Tightened the demo physical-consistency input so its default report passes the documented virial threshold.
+
 ## 1.1.0 - 2026-07-16
 
 ### Fixed

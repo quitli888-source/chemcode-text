@@ -657,7 +657,7 @@ def _demo_report() -> ConsistencyReport:
         dt=0.005, mass=1.0, skin=0.3, v_max=5.0,
         energies=[100.0, 100.0001, 100.0002, 99.9999, 100.0001],
         T_samples=[1.0, 1.005, 0.998, 1.002, 0.999, 1.001, 1.003, 0.997, 1.0, 1.001],
-        P_measured=48.5,
+        P_measured=47.9,
     )
 
 

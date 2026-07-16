@@ -41,6 +41,31 @@ subprocess.run(["python", "scripts/analyze_trajectory.py", "traj.*.xml"])
 - CUDA Toolkit（GPU模式需要）
 - pygamd 1.4.8
 
+## Mandatory human-in-the-loop workflow
+
+The TL;DR and code examples below are reference snippets only. For an actual PyGAMD task, the Agent MUST execute the following five gates in order by calling the `human_checkpoint` tool. A plain-text question does not count as a checkpoint.
+
+These gates are mandatory even when Full Access is enabled. The Agent must never use "always allow" for them. If a checkpoint is rejected or times out, stop the next action, report the current evidence, and wait for a new user instruction. Do not immediately repeat the same checkpoint.
+
+1. `pygamd-H1-environment` — Environment readiness
+   - Evidence must include Python version, PyGAMD import/version, Numba/CUDA availability, selected execution device, and any fallback.
+   - Next action: create or read the initial configuration.
+2. `pygamd-H2-system` — Initial system acceptance
+   - Evidence must include configuration path, particle count (`npa`), type count (`ntypes`), box dimensions, density, topology counts, and overlap/minimum-distance check.
+   - Next action: define force-field and integration parameters.
+3. `pygamd-H3-preflight` — Parameter and physical-consistency acceptance
+   - This gate may be requested only after `physical_consistency_check.py` passes with zero failed checks.
+   - Evidence must include `alpha`, `sigma`, `gamma`, temperature/FDT relation, bond parameters, `dt`, `rcut`, density, box/skin checks, and the check report summary.
+   - Next action: run a short equilibration. Never start production here.
+4. `pygamd-H4-equilibration` — Equilibration acceptance
+   - Evidence must include equilibration steps, no NaN/Inf, temperature mean/fluctuation, pressure trend, output file paths/sizes, and whether restart data is usable.
+   - Next action: run the stated production plan, including exact steps and output periods.
+5. `pygamd-H5-production` — Production-result acceptance
+   - Evidence must include completed steps, final thermodynamic checks, trajectory/log paths and sizes, warnings, and proposed analyses/exports.
+   - Next action: analyze/export results or finalize the task.
+
+The Agent must not collapse equilibration and production into one uninterrupted script, because doing so bypasses H4. Run them as separate phases. Before every checkpoint, show measured values rather than generic statements such as "checked" or "looks good".
+
 ## GPU初始化（必须）
 
 **在 `import pygamd` 之前**调用GPU初始化模块：

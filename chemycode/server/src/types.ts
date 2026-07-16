@@ -151,7 +151,7 @@ export type StreamEvent =
   | { type: 'thinking'; messageId: string; content: string; topic?: string }
   | { type: 'status'; status: TaskStatus; message?: string; progress?: number; messageId?: string; topic?: string }
   | { type: 'file'; messageId: string; file: GeneratedFile; topic?: string }
-  | { type: 'confirm_request'; messageId: string; prompt: string; options: { id: string; label: string; destructive?: boolean }[]; toolName?: string; topic?: string }
+  | { type: 'confirm_request'; messageId: string; prompt: string; options: { id: string; label: string; destructive?: boolean }[]; toolName?: string; allowAlways?: boolean; required?: boolean; topic?: string }
   | { type: 'confirm_timeout'; messageId: string; topic?: string }
   | { type: 'error'; code: string; message: string; retryable: boolean; messageId?: string; topic?: string }
   | { type: 'done'; messageId: string; finishReason: 'stop' | 'tool_calls' | 'max_tokens' | 'cancelled' | 'error'; topic?: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number; reasoningTokens?: number }; model?: string; contextWindow?: number; generatedFiles?: Array<{ name: string; path: string; type: string }> }

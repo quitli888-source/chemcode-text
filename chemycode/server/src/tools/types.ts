@@ -22,6 +22,12 @@ export interface ToolDefinition {
   parameters: ToolParameters;
   /** Whether this tool requires user confirmation before execution. */
   dangerous?: boolean;
+  /**
+   * `required` confirmations cannot be bypassed by full-access mode or a
+   * per-tool allowlist. Use this for scientific workflow gates where the
+   * human decision is part of the procedure, not merely a safety prompt.
+   */
+  confirmationMode?: 'standard' | 'required';
 }
 
 export interface ToolResult {

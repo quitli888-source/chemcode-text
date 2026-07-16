@@ -170,6 +170,7 @@ export type StreamEvent =
   | StreamEventStatus
   | StreamEventFile
   | StreamEventConfirmRequest
+  | StreamEventConfirmTimeout
   | StreamEventError
   | StreamEventDone
   | StreamEventTurnState;
@@ -251,6 +252,13 @@ export interface StreamEventConfirmRequest {
   options: { id: string; label: string; destructive?: boolean }[];
   /** The tool name being confirmed (for "always allow" UI). */
   toolName?: string;
+  allowAlways?: boolean;
+  required?: boolean;
+}
+
+export interface StreamEventConfirmTimeout {
+  type: 'confirm_timeout';
+  messageId: string;
 }
 
 export interface StreamEventError {

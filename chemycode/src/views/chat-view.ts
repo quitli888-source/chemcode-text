@@ -467,6 +467,8 @@ export class ChatView extends LitElement {
   @state() private confirmPrompt = '';
   @state() private confirmOptions: { id: string; label: string; destructive?: boolean }[] = [];
   @state() private confirmToolName: string | undefined = undefined;
+  @state() private confirmAllowAlways = false;
+  @state() private confirmRequired = false;
   @state() private fullAccessMode: boolean = false;
   @state() private allowedTools: string[] = [];
   @state() private models: ConfiguredModel[] = [];
@@ -521,6 +523,8 @@ export class ChatView extends LitElement {
         this.confirmPrompt = s.pendingConfirm.prompt;
         this.confirmOptions = s.pendingConfirm.options;
         this.confirmToolName = s.pendingConfirm.toolName;
+        this.confirmAllowAlways = s.pendingConfirm.allowAlways === true;
+        this.confirmRequired = s.pendingConfirm.required === true;
       }
       this.fullAccessMode = s.fullAccessMode;
       this.allowedTools = s.allowedTools;
@@ -1179,7 +1183,10 @@ export class ChatView extends LitElement {
         ${this.showConfirm ? html`
           <div class="confirm-overlay">
             <div class="confirm-box">
-              <div class="confirm-text">${this.confirmPrompt}</div>
+              <div class="confirm-text">
+                ${this.confirmRequired ? html`<div style="font-weight:600;color:var(--color-accent);margin-bottom:6px;">强制人工节点（不能跳过）</div>` : ''}
+                ${this.confirmPrompt}
+              </div>
               <div class="confirm-actions">
                 ${this.confirmOptions.map((opt) => html`
                   <button
@@ -1188,7 +1195,7 @@ export class ChatView extends LitElement {
                     ${opt.label}
                   </button>
                 `)}
-                ${this.confirmToolName ? html`
+                ${this.confirmToolName && this.confirmAllowAlways && !this.confirmRequired ? html`
                   <button class="confirm-btn always-allow" @click=${() => this.onConfirmAlwaysAllow()}>
                     始终允许${this.confirmToolName}
                   </button>

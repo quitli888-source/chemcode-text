@@ -631,7 +631,7 @@ ${e.content}`).join('\n\n---\n\n')}`;
       if (allowTool) {
         for (const cm of client.confirmManagers.values()) {
           const toolName = cm.getPendingToolName(confirmId);
-          if (toolName) {
+          if (toolName && cm.getPendingAllowAlways(confirmId)) {
             cm.addAllowedTool(toolName);
             break;
           }
@@ -652,18 +652,20 @@ ${e.content}`).join('\n\n---\n\n')}`;
     case 'set_access': {
       // Set access mode for the session's ConfirmManager.
       const { sessionId, mode, tools } = cmd as { type: 'set_access'; sessionId: string; mode: 'full' | 'confirm'; tools?: string[] };
-      const cm = client.confirmManagers.get(sessionId);
-      if (cm) {
-        if (mode === 'full') {
-          cm.setFullAccess(true);
+      let cm = client.confirmManagers.get(sessionId);
+      if (!cm) {
+        cm = new ConfirmManager();
+        client.confirmManagers.set(sessionId, cm);
+      }
+      if (mode === 'full') {
+        cm.setFullAccess(true);
+      } else {
+        cm.setFullAccess(false);
+        // Optionally also clear specific tools from whitelist.
+        if (tools && tools.length > 0) {
+          cm.clearAllowedTools(tools);
         } else {
-          cm.setFullAccess(false);
-          // Optionally also clear specific tools from whitelist.
-          if (tools && tools.length > 0) {
-            cm.clearAllowedTools(tools);
-          } else {
-            cm.clearAllowedTools();
-          }
+          cm.clearAllowedTools();
         }
       }
       break;
